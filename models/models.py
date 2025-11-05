@@ -32,7 +32,7 @@ def webhook_worker(payload):
             print("Webhook error:", e)
 
         print("Retrying in 5 seconds...")
-        time.sleep(5)  # Wait before retrying
+        time.sleep(60)  # Wait before retrying
 
 
 
@@ -118,7 +118,6 @@ class Product(models.Model):
     write_date = fields.Datetime(
         'Last Updated on',  index=True, help="Date on which the record was last updated.")
     
-    
 
     @api.model
     def create(self, vals):
@@ -176,6 +175,7 @@ class Product(models.Model):
             }
             send_webhook(payload)
         return result
+
 
 
 class LoyaltyProgram(models.Model):
@@ -252,6 +252,7 @@ class LoyaltyProgram(models.Model):
             }
             send_webhook(payload)
         return result
+    
 
 class LoyaltyRule(models.Model):
     _inherit = 'loyalty.rule'
@@ -315,6 +316,7 @@ class LoyaltyRule(models.Model):
             }
             send_webhook(payload)
         return result
+
 
 
 class LoyaltyReward(models.Model):
