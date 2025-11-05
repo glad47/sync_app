@@ -1,49 +1,48 @@
 from odoo import models, fields, api,_
 from odoo.exceptions import  UserError
+import time
 import requests
+import threading
 
 
-def send_webhook(payload):
-        url = 'https://p.qeu.app/api/odoo/webhook'
-        headers = {
-            'Content-Type': 'application/json',
-            # Add authentication if needed:
-            # 'Authorization': 'Bearer YOUR_API_KEY'
-        }
+def webhook_worker(payload):
+    url = 'https://p.qeu.app/api/odoo/webhook'
+    headers = {
+        'Content-Type': 'application/json',
+        # 'Authorization': 'Bearer YOUR_API_KEY'
+    }
+
+    while True:
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
             response.raise_for_status()
-            if response.ok:
-                print("Request succeeded!")
-            else:
-                print("Request failed:", response.reason)
 
-            # Print response body (JSON or text)
-            try:
-                print("Response JSON:", response.json())  # If response is JSON
-            except ValueError:
-                print("Response Text:", response.text)    # If not JSON
+            if response.ok:
+                print("✅ Webhook succeeded!")
+                try:
+                    print("Response JSON:", response.json())
+                except ValueError:
+                    print("Response Text:", response.text)
+                break  # Exit loop on success
+
+            else:
+                print("Webhook failed:", response.reason)
 
         except requests.exceptions.RequestException as e:
-            print(e)
-            # _logger = self.env['ir.logging']
-            # _logger.create({
-            #     'name': 'Webhook Error',
-            #     'type': 'server',
-            #     'level': 'error',
-            #     'message': str(e),
-            #     'path': url,
-            #     'func': '_send_webhook',
-            #     'line': 'N/A',
-            # })
+            print("Webhook error:", e)
+
+        print("Retrying in 5 seconds...")
+        time.sleep(5)  # Wait before retrying
+
+
+
+def send_webhook(payload):
+    thread = threading.Thread(target=webhook_worker, args=(payload,))
+    thread.start()
 
 
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
-
-
-    
-
     @api.model
     def create(self, vals):
         result = super().create(vals)
