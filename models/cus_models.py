@@ -1,8 +1,15 @@
-from odoo import models, fields, api,_
+from odoo import models,http, fields, api,_
 from odoo.exceptions import  UserError
 import time
 import requests
+from odoo.http import request
 import threading
+import logging
+import json
+import random
+
+_logger = logging.getLogger(__name__)
+
 
 
 def webhook_worker(payload):
@@ -568,3 +575,229 @@ class LoyaltyReward(models.Model):
             }
             # send_webhook(payload)
         return result
+
+
+
+
+class PosSyncController(http.Controller):
+
+
+    def get_or_create_open_session_by_name(self, config_name="App"):
+        PosConfig = request.env['pos.config'].sudo()
+        PosSession = request.env['pos.session'].sudo()
+
+        # Find the POS config by name
+        config = PosConfig.search([('name', '=', config_name)], limit=1)
+        if not config:
+            raise ValueError(f"POS config named '{config_name}' not found.")
+
+        # Search for an open session
+        session = PosSession.search([
+            ('config_id', '=', config.id),
+            ('state', '=', 'opened')
+        ], limit=1)
+
+        if session:
+            return session
+
+        # Create and manually open a new session
+        session = PosSession.create({
+            'config_id': config.id,
+            'user_id': request.env.uid,
+            'state': 'opened',
+            'start_at': fields.Datetime.now(),
+        })
+
+        return session
+
+
+
+
+    def generate_reward_code(self):
+        return (str(random.random() + 1)[2:])
+
+    def generate_temp_coupon_id(self):
+        return -(int(time.time() * 1000) % 100000)
+
+
+    def build_normal_product_line(self, product, qty, price_unit, discount, tax_ids):
+        return {
+            "qty": qty,
+            "price_unit": price_unit,
+            "price_subtotal": qty * price_unit,
+            "price_subtotal_incl": qty * price_unit * 1.15,  # Example tax
+            "discount": discount,
+            "product_id": product.id,
+            "tax_ids": [[6, False, tax_ids]],
+            "id": product.id,
+            "pack_lot_ids": [],
+            "description": product.description_sale or "",
+            "full_product_name": product.name,
+            "price_extra": 0,
+            "price_manually_set": False,
+            "price_automatically_set": False,
+            "eWalletGiftCardProgramId": None
+        }
+
+    def build_reward_product_line(self, product, qty, price_unit, discount, tax_ids, reward_id, reward_product_id, points_cost):
+        reward_identifier_code = self.generate_reward_code()
+        coupon_id = self.generate_temp_coupon_id()
+
+        reward_line = [
+            0,
+            0,
+            {
+                "qty": qty,
+                "price_unit": price_unit,
+                "price_subtotal": qty * price_unit,
+                "price_subtotal_incl": qty * price_unit * 1.15,
+                "discount": discount,
+                "product_id": product.id,
+                "tax_ids": [[6, False, tax_ids]],
+                "id": product.id,
+                "pack_lot_ids": [],
+                "description": product.description_sale or "",
+                "full_product_name": product.name,
+                "price_extra": 0,
+                "price_manually_set": False,
+                "price_automatically_set": True,
+                "is_reward_line": True,
+                "reward_id": reward_id,
+                "reward_product_id": reward_product_id,
+                "coupon_id": coupon_id,
+                "reward_identifier_code": reward_identifier_code,
+                "points_cost": points_cost,
+                "eWalletGiftCardProgramId": None
+            }
+        ]
+
+         # Fetch applied rules from the reward program
+        applied_rules = []
+        if reward_id:
+            reward = request.env['loyalty.reward'].sudo().browse(reward_id)
+            if reward.exists() and reward.program_id:
+                applied_rules = reward.program_id.rule_ids.ids
+
+
+        coupon_point_change = {
+            str(coupon_id): {
+                "points": points_cost or 0,
+                "program_id": reward.program_id.id,
+                "coupon_id": coupon_id,
+                "appliedRules": applied_rules
+            }
+        }
+
+
+        return reward_line, coupon_point_change
+
+    @http.route('/pos/sync_orders', type='json', auth='public', methods=['POST'])
+    def sync_orders(self):
+        session = self.get_or_create_open_session_by_name("App")
+        session_id = session.id
+        print("***************")
+        print(session_id)
+
+        data = json.loads(request.httprequest.data)
+        orders = data.get('orders', [])
+        draft = data.get('draft', False)
+
+        if not orders:
+            return {'status': 'error', 'message': 'No orders provided'}
+
+        all_prepared_orders = []
+
+        for order in orders:
+            customer_data = order.get('customer', {})
+            phone = customer_data.get('phone')
+            name = customer_data.get('name')
+            vat = customer_data.get('vat')
+
+            partner = request.env['res.partner'].sudo().search([
+                ('phone', '=', phone),
+                ('customer_rank', '>', 0)
+            ], limit=1)
+
+            if partner:
+                updates = {}
+                if name and partner.name != name:
+                    updates['name'] = name
+                if vat and partner.vat != vat:
+                    updates['vat'] = vat
+                if updates:
+                    partner.write(updates)
+            else:
+                partner = request.env['res.partner'].sudo().create({
+                    'name': name or phone,
+                    'phone': phone,
+                    'vat': vat,
+                    'customer_rank': 1,
+                })
+
+            simplified_lines = order.get('order_lines', [])
+            prepared_lines = []
+            coupon_point_changes = {}
+
+            for line in simplified_lines:
+                qty = line.get('qty')
+                price_unit = line.get('price_unit')
+                product_id = line.get('product_id')
+                discount = line.get('discount', 0)
+
+                product = request.env['product.product'].sudo().browse(product_id)
+                if not product.exists():
+                    return {
+                        "status": "error",
+                        "message": f"Product not found: ID {product_id}"
+                    }
+
+                tax_ids = product.taxes_id.ids if product.taxes_id else request.env['account.tax'].sudo().search([
+                    ('type_tax_use', '=', 'sale'),
+                    ('company_id', '=', request.env.company.id)
+                ]).ids
+
+                is_reward_line = line.get('is_reward_line', False)
+
+                if is_reward_line:
+                    reward_id = line.get('reward_id')
+                    reward_product_id = line.get('reward_product_id')
+                    points_cost = line.get('points_cost')
+
+                    reward_line, coupon_change = self.build_reward_product_line(
+                        product, qty, price_unit, discount, tax_ids,
+                        reward_id, reward_product_id, points_cost
+                    )
+
+                    prepared_lines.append(reward_line)
+                    coupon_point_changes.update(coupon_change)
+                else:
+                    normal_line = self.build_normal_product_line(product, qty, price_unit, discount, tax_ids)
+                    prepared_lines.append(normal_line)
+
+            all_prepared_orders.append({
+                'customer_id': partner.id,
+                'lines': prepared_lines,
+                'couponPointChanges': coupon_point_changes
+            })
+
+        return {
+            "status": "success",
+            "orders": all_prepared_orders,
+            "draft": draft
+        }
+
+
+        # try:
+        #     order_model = request.env['pos.order'].sudo()
+        #     result = order_model.create_from_ui(orders, draft)
+        #     return {
+        #         'status': 'success',
+        #         'processed_orders': result
+        #     }
+        # except Exception as e:
+        #     _logger.exception("Failed to sync PoS orders")
+        #     return {
+        #         'status': 'error',
+        #         'message': str(e)
+        #     }
+    
