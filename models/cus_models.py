@@ -7,6 +7,7 @@ import threading
 import logging
 import json
 import random
+import uuid
 
 _logger = logging.getLogger(__name__)
 
@@ -582,7 +583,46 @@ class LoyaltyReward(models.Model):
 class PosSyncController(http.Controller):
 
 
-    def get_or_create_open_session_by_name(self, config_name="App"):
+
+
+    def get_user_id_by_name(self, username="App"):
+        user = request.env['res.users'].sudo().search([('name', '=', username)], limit=1)
+        if not user:
+            return None  # or raise an exception if preferred
+        return user.id
+
+
+
+
+    def generate_bank_transfer_statement(self, amount, method_name="Bank"):
+        # Search for the payment method by name
+        PaymentMethod = self.env['pos.payment.method'].sudo()
+        method = PaymentMethod.search([('name', '=', method_name)], limit=1)
+
+        if not method:
+            raise ValueError(f"Payment method named '{method_name}' not found.")
+
+        # Generate timestamp
+        timestamp = fields.Datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Build statement_ids block
+        statement_ids = [
+            [0, 0, {
+                "name": timestamp,
+                "payment_method_id": method.id,
+                "amount": amount,
+                "payment_status": "",
+                "ticket": "",
+                "card_type": "",
+                "cardholder_name": "",
+                "transaction_id": ""
+            }]
+        ]
+
+        return statement_ids
+
+
+    def get_or_create_open_session_by_name(self, user_id, config_name="App"):
         PosConfig = request.env['pos.config'].sudo()
         PosSession = request.env['pos.session'].sudo()
 
@@ -603,7 +643,7 @@ class PosSyncController(http.Controller):
         # Create and manually open a new session
         session = PosSession.create({
             'config_id': config.id,
-            'user_id': request.env.uid,
+            'user_id': user_id,
             'state': 'opened',
             'start_at': fields.Datetime.now(),
         })
@@ -621,7 +661,9 @@ class PosSyncController(http.Controller):
 
 
     def build_normal_product_line(self, product, qty, price_unit, discount, tax_ids):
-        return {
+        return  [
+            0,
+            0, {
             "qty": qty,
             "price_unit": price_unit,
             "price_subtotal": qty * price_unit,
@@ -638,6 +680,7 @@ class PosSyncController(http.Controller):
             "price_automatically_set": False,
             "eWalletGiftCardProgramId": None
         }
+        ]
 
     def build_reward_product_line(self, product, qty, price_unit, discount, tax_ids, reward_id, reward_product_id, points_cost):
         reward_identifier_code = self.generate_reward_code()
@@ -691,12 +734,38 @@ class PosSyncController(http.Controller):
 
         return reward_line, coupon_point_change
 
+   
+
+    def build_order_metadata(self, order_id, partner_id, session_id, user_id):
+        return {
+            "pos_session_id": session_id,
+            "pricelist_id": 1,  # You can make this dynamic if needed
+            "partner_id": partner_id,
+            "user_id": user_id,
+            "uid": order_id,
+            "sequence_number": 4,  # You can auto-increment or generate this
+            "creation_date": fields.Datetime.now().isoformat(),
+            "fiscal_position_id": False,
+            "server_id": False,
+            "to_invoice": True,
+            "to_ship": False,
+            "is_tipped": False,
+            "tip_amount": 0,
+            "access_token": str(uuid.uuid4()),
+            "disabledRewards": [],
+            "codeActivatedProgramRules": [],
+            "codeActivatedCoupons": []
+        }
+    
+
     @http.route('/pos/sync_orders', type='json', auth='public', methods=['POST'])
     def sync_orders(self):
-        session = self.get_or_create_open_session_by_name("App")
+        user_id = self.get_user_id_by_name("App")
+        if not user_id:
+            return {"status": "error", "message": "User named 'App' not found"}
+
+        session = self.get_or_create_open_session_by_name(user_id, "App")
         session_id = session.id
-        print("***************")
-        print(session_id)
 
         data = json.loads(request.httprequest.data)
         orders = data.get('orders', [])
@@ -708,7 +777,16 @@ class PosSyncController(http.Controller):
         all_prepared_orders = []
 
         for order in orders:
-            customer_data = order.get('customer', {})
+            order_id = order.get('id')
+            order_data = order.get('data', {})
+
+            order_name = order_data.get('name')
+            amount_paid = order_data.get('amount_paid', 0)
+            amount_total = order_data.get('amount_total', 0)
+            amount_tax = order_data.get('amount_tax', 0)
+            amount_return = order_data.get('amount_return', 0)
+
+            customer_data = order_data.get('customer', {})
             phone = customer_data.get('phone')
             name = customer_data.get('name')
             vat = customer_data.get('vat')
@@ -734,7 +812,7 @@ class PosSyncController(http.Controller):
                     'customer_rank': 1,
                 })
 
-            simplified_lines = order.get('order_lines', [])
+            simplified_lines = order_data.get('order_lines', [])
             prepared_lines = []
             coupon_point_changes = {}
 
@@ -774,30 +852,267 @@ class PosSyncController(http.Controller):
                     normal_line = self.build_normal_product_line(product, qty, price_unit, discount, tax_ids)
                     prepared_lines.append(normal_line)
 
+            # Generate statement_ids using Bank method
+            bank_method = request.env['pos.payment.method'].sudo().search([('name', '=', 'Bank')], limit=1)
+            if not bank_method:
+                return {"status": "error", "message": "Bank payment method not found"}
+
+            statement_ids = [
+                [0, 0, {
+                    "name": fields.Datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "payment_method_id": bank_method.id,
+                    "amount": amount_paid,
+                    "payment_status": "",
+                    "ticket": "",
+                    "card_type": "",
+                    "cardholder_name": "",
+                    "transaction_id": ""
+                }]
+            ]
+
+            metadata = self.build_order_metadata(
+                order_id=order_id,
+                partner_id=partner.id,
+                session_id=session_id,
+                user_id=user_id
+            )
+
             all_prepared_orders.append({
-                'customer_id': partner.id,
-                'lines': prepared_lines,
-                'couponPointChanges': coupon_point_changes
+                'id': order_id,
+                'data': {
+                    'name': order_name,
+                    'customer_id': partner.id,
+                    'lines': prepared_lines,
+                    'couponPointChanges': coupon_point_changes,
+                    'statement_ids': statement_ids,
+                    'amount_paid': amount_paid,
+                    'amount_total': amount_total,
+                    'amount_tax': amount_tax,
+                    'amount_return': amount_return,
+                    **metadata 
+                }
             })
 
-        return {
-            "status": "success",
-            "orders": all_prepared_orders,
-            "draft": draft
-        }
+
+        # return {
+        #     "status": "success",
+        #     "orders": all_prepared_orders,
+        #     "draft": draft
+        # }
 
 
-        # try:
-        #     order_model = request.env['pos.order'].sudo()
-        #     result = order_model.create_from_ui(orders, draft)
-        #     return {
-        #         'status': 'success',
-        #         'processed_orders': result
-        #     }
-        # except Exception as e:
-        #     _logger.exception("Failed to sync PoS orders")
-        #     return {
-        #         'status': 'error',
-        #         'message': str(e)
-        #     }
-    
+
+        try:
+            order_model = request.env['pos.order'].sudo()
+            result = order_model.create_from_ui(all_prepared_orders, draft)
+            return {
+                'status': 'success',
+                'processed_orders': result
+            }
+        except Exception as e:
+            _logger.exception("Failed to sync PoS orders")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+    @http.route('/pos/refund_orders', type='json', auth='public', methods=['POST'])
+    def refund_orders(self):
+        user_id = self.get_user_id_by_name("App")
+        if not user_id:
+            return {"status": "error", "message": "User named 'App' not found"}
+
+        session = self.get_or_create_open_session_by_name(user_id, "App")
+        session_id = session.id
+
+        data = json.loads(request.httprequest.data)
+        orders = data.get('orders', [])
+        draft = data.get('draft', False)
+
+        if not orders:
+            return {'status': 'error', 'message': 'No orders provided'}
+
+        all_prepared_orders = []
+
+        for order in orders:
+            order_id = order.get('id')
+            order_data = order.get('data', {})
+            refunded_uid = order_data.get('refunded_uid')
+
+            order_name = order_data.get('name')
+            amount_paid = order_data.get('amount_paid', 0)
+            amount_total = order_data.get('amount_total', 0)
+            amount_tax = order_data.get('amount_tax', 0)
+            amount_return = order_data.get('amount_return', 0)
+
+            customer_data = order_data.get('customer', {})
+            phone = customer_data.get('phone')
+            name = customer_data.get('name')
+            vat = customer_data.get('vat')
+
+            partner = request.env['res.partner'].sudo().search([
+                ('phone', '=', phone),
+                ('customer_rank', '>', 0)
+            ], limit=1)
+
+            if partner:
+                updates = {}
+                if name and partner.name != name:
+                    updates['name'] = name
+                if vat and partner.vat != vat:
+                    updates['vat'] = vat
+                if updates:
+                    partner.write(updates)
+            else:
+                partner = request.env['res.partner'].sudo().create({
+                    'name': name or phone,
+                    'phone': phone,
+                    'vat': vat,
+                    'customer_rank': 1,
+                })
+
+            simplified_lines = order_data.get('order_lines', [])
+            prepared_lines = []
+            coupon_point_changes = {}
+
+            # 🔍 Find original order lines for refund matching
+            refunded_order = request.env['pos.order'].sudo().search([('pos_reference', '=', refunded_uid)], limit=1)
+            refunded_lines = request.env['pos.order.line'].sudo().search([
+                    ('order_id', '=', refunded_order.id)
+                ])
+
+
+            for line in simplified_lines:
+                qty = line.get('qty')
+                price_unit = line.get('price_unit')
+                product_id = line.get('product_id')
+                discount = line.get('discount', 0)
+
+                product = request.env['product.product'].sudo().browse(product_id)
+                if not product.exists():
+                    return {
+                        "status": "error",
+                        "message": f"Product not found: ID {product_id}"
+                    }
+
+                tax_ids = product.taxes_id.ids if product.taxes_id else request.env['account.tax'].sudo().search([
+                    ('type_tax_use', '=', 'sale'),
+                    ('company_id', '=', request.env.company.id)
+                ]).ids
+
+                is_reward_line = line.get('is_reward_line', False)
+
+                # Match refund line to original line
+                refunded_line_id = False
+                if qty < 0 and refunded_lines:
+                    # Step 1: Find original lines for this product and price
+                    candidate_lines = refunded_lines.filtered(
+                        lambda l: l.product_id.id == product_id and l.qty > 0 and l.price_unit == price_unit
+                    )
+
+                    # Step 2: Loop through candidates to find one with refundable quantity
+                    for original_line in candidate_lines:
+                        # Step 3: Find all refund lines that reference this original line
+                        refunded_lines_for_original = request.env['pos.order.line'].sudo().search([
+                            ('refunded_orderline_id', '=', original_line.id),
+                            ('qty', '<', 0)
+                        ])
+
+                        # Step 4: Calculate total refunded quantity
+                        total_refunded_qty = sum(abs(refund.qty) for refund in refunded_lines_for_original)
+                        remaining_qty = original_line.qty - total_refunded_qty
+
+                        # Step 5: Validate refund quantity
+                        if remaining_qty <= 0:
+                            continue  # This line is fully refunded, try next one
+
+                        if abs(qty) <= remaining_qty:
+                            refunded_line_id = original_line.id
+                            break
+                        else:
+                            return {
+                                "status": "error",
+                                "message": f"Refund quantity for product {product_id} exceeds remaining quantity ({remaining_qty})"
+                            }
+
+                    # Step 6: If no match found
+                    if not refunded_line_id:
+                        return {
+                            "status": "error",
+                            "message": f"Product {product_id} has already been fully refunded or no matching line found"
+                        }
+
+
+
+                if is_reward_line:
+                    reward_id = line.get('reward_id')
+                    reward_product_id = line.get('reward_product_id')
+                    points_cost = line.get('points_cost')
+
+                    reward_line, coupon_change = self.build_reward_product_line(
+                        product, qty, price_unit, discount, tax_ids,
+                        reward_id, reward_product_id, points_cost
+                    )
+                    reward_line[2]['refunded_orderline_id'] = refunded_line_id
+                    prepared_lines.append(reward_line)
+                    coupon_point_changes.update(coupon_change)
+                else:
+                    normal_line = self.build_normal_product_line(product, qty, price_unit, discount, tax_ids)
+                    normal_line[2]['refunded_orderline_id'] = refunded_line_id
+                    prepared_lines.append(normal_line)
+
+            bank_method = request.env['pos.payment.method'].sudo().search([('name', '=', 'Bank')], limit=1)
+            if not bank_method:
+                return {"status": "error", "message": "Bank payment method not found"}
+
+            statement_ids = [
+                [0, 0, {
+                    "name": fields.Datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "payment_method_id": bank_method.id,
+                    "amount": amount_paid,
+                    "payment_status": "",
+                    "ticket": "",
+                    "card_type": "",
+                    "cardholder_name": "",
+                    "transaction_id": ""
+                }]
+            ]
+
+            metadata = self.build_order_metadata(
+                order_id=order_id,
+                partner_id=partner.id,
+                session_id=session_id,
+                user_id=user_id
+            )
+
+            all_prepared_orders.append({
+                'id': order_id,
+                'data': {
+                    'name': order_name,
+                    'customer_id': partner.id,
+                    'lines': prepared_lines,
+                    'couponPointChanges': coupon_point_changes,
+                    'statement_ids': statement_ids,
+                    'amount_paid': amount_paid,
+                    'amount_total': amount_total,
+                    'amount_tax': amount_tax,
+                    'amount_return': amount_return,
+                    **metadata 
+                }
+            })
+
+        try:
+            order_model = request.env['pos.order'].sudo()
+            result = order_model.create_from_ui(all_prepared_orders, draft)
+            return {
+                'status': 'success',
+                'processed_orders': result
+            }
+        except Exception as e:
+            _logger.exception("Failed to sync refund PoS orders")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+            
+        
