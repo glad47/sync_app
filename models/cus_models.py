@@ -42,7 +42,7 @@ def webhook_worker(payload):
         except requests.exceptions.RequestException as e:
             print("Webhook error:", e)
 
-        print("Retrying in 5 seconds...")
+        print("Retrying in 60 seconds...")
         time.sleep(60)  # Wait before retrying
 
 
