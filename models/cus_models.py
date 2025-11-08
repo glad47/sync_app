@@ -8,6 +8,9 @@ import logging
 import json
 import random
 import uuid
+import datetime
+import secrets
+from datetime import datetime, timedelta
 
 _logger = logging.getLogger(__name__)
 
@@ -49,6 +52,17 @@ def send_webhook(payload):
     thread.start()
 
 
+def sanitize(obj):
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize(v) for v in obj]
+    elif hasattr(obj, 'isoformat'):
+        return obj.isoformat()
+    return obj
+
+
+
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
     
@@ -58,10 +72,12 @@ class ProductTemplate(models.Model):
         if result.product_variant_ids:
             # Define the fields you want to include
             fields_to_return = [
-                'id', 'name', 'active', 'uom_id', 'barcode', 'categ_id',
-                'taxes_id', 'route_ids', 'uom_po_id', 'list_price',
-                'sale_delay', 'seller_ids', 'tax_string', 'create_date',
-                'location_id', 'display_name', 'product_variant_ids'
+                'id', 'name', 'uom_id', 'barcode', 'categ_id',
+                'taxes_id', 'uom_po_id', 'list_price', 'sale_ok', 'purchase_ok', 'product_tag_ids',
+                'sale_delay', 'seller_ids', 'tax_string', 'create_date', 'standard_price', 'volume_uom_name',
+                'weight_uom_name', 'available_in_pos','description', 'attribute_line_ids', 'to_weight', 'pos_categ_id',
+                'location_id', 'display_name', 'product_variant_ids', 'volume', 'weight', 'active'
+
             ]
 
             data = result.read(fields_to_return)[0]
@@ -73,21 +89,45 @@ class ProductTemplate(models.Model):
 
             # Replace relational fields with full object data
             relational_fields = [
-                'uom_id', 'categ_id', 'taxes_id', 'route_ids',
-                'uom_po_id', 'seller_ids', 'product_variant_ids', 'location_id'
+                'uom_id', 'categ_id', 'taxes_id', 'pos_categ_id',
+                'uom_po_id', 'seller_ids', 'product_variant_ids', 
+                'location_id', 'product_tag_ids', 'attribute_line_ids'
             ]
 
             for field in relational_fields:
                 value = data.get(field)
-            if isinstance(value, list) and value:  # many2many or one2many
-                records = self.env[self.fields_get()[field]['relation']].browse([v[0] if isinstance(v, tuple) else v for v in value])
-                data[field] = records.read()  # full object list
-            elif isinstance(value, tuple) and value:  # many2one
-                record = self.env[self.fields_get()[field]['relation']].browse(value[0])
-                data[field] = record.read()[0] if record else None
-            elif isinstance(value, int):  # fallback for many2one as int
-                record = self.env[self.fields_get()[field]['relation']].browse(value)
-                data[field] = record.read()[0] if record else None
+                if isinstance(value, list) and value:  # many2many or one2many
+                    records = self.env[self.fields_get()[field]['relation']].browse(
+                        [v[0] if isinstance(v, tuple) else v for v in value]
+                    )
+                    data[field] = records.read()
+                elif isinstance(value, tuple) and value:  # many2one
+                    record = self.env[self.fields_get()[field]['relation']].browse(value[0])
+                    data[field] = record.read()[0] if record else None
+                elif isinstance(value, int):  # fallback for many2one as int
+                    record = self.env[self.fields_get()[field]['relation']].browse(value)
+                    data[field] = record.read()[0] if record else None
+
+            # extract only  the name 
+            # for field in relational_fields:
+            #     value = data.get(field)
+            #     relation = self.fields_get()[field]['relation']
+ 
+            #     if field == 'product_variant_ids' and isinstance(value, list):
+            #         # Extract only the IDs
+            #         data[field] = [v[0] if isinstance(v, tuple) else v for v in value]
+            #     elif field == 'attribute_line_ids' and isinstance(value, list) and value:  
+            #         records = self.env[relation].browse([v[0] if isinstance(v, tuple) else v for v in value])
+            #         data[field] = [r.display_name for r in records if hasattr(r, 'display_name')]
+            #     elif isinstance(value, list) and value:  # many2many or one2many
+            #         records = self.env[relation].browse([v[0] if isinstance(v, tuple) else v for v in value])
+            #         data[field] = [r.name for r in records if hasattr(r, 'name')]
+            #     elif isinstance(value, tuple) and value:  # many2one
+            #         record = self.env[relation].browse(value[0])
+            #         data[field] = record.name if record and hasattr(record, 'name') else None
+            #     elif isinstance(value, int):  # fallback for many2one as int
+            #         record = self.env[relation].browse(value)
+            #         data[field] = record.name if record and hasattr(record, 'name') else None
 
 
             payload = {
@@ -98,7 +138,14 @@ class ProductTemplate(models.Model):
                 "data": data
             }
 
-            send_webhook(payload)
+
+            print("***************$$$$$$$$$**************")
+            print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
+            
+            # print(payload)
+
+
+            # send_webhook(payload)
         return result
 
     def write(self, vals):
@@ -116,6 +163,8 @@ class ProductTemplate(models.Model):
                     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
                         data[key] = value.isoformat() if value else None
 
+                        
+
                 payload = {
                     "operation": 1,
                     "type": 0,
@@ -123,7 +172,7 @@ class ProductTemplate(models.Model):
                     "ids": self.ids,
                     "data": data
                 }
-                send_webhook(payload)
+                # send_webhook(payload)
         return result
 
     def unlink(self):
@@ -144,7 +193,8 @@ class ProductTemplate(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            send_webhook(payload)
+            
+            # send_webhook(payload)
         return result
 
 
@@ -158,13 +208,16 @@ class Product(models.Model):
     @api.model
     def create(self, vals):
         result = super().create(vals)
-        fields_to_return = [
-                'id', 'code', 'name', 'active', 'uom_id', 'barcode', 'categ_id',
-                'taxes_id', 'lst_price', 'route_ids', 'uom_po_id', 'list_price',
-                'sale_delay', 'seller_ids', 'tax_string', 'create_date',
-                'location_id', 'display_name', 'product_variant_ids'
-            ]
 
+        fields_to_return = [
+                'id','code', 'name', 'uom_id', 'barcode', 'categ_id',
+                'taxes_id', 'uom_po_id','lst_price', 'list_price', 'sale_ok', 'purchase_ok', 'product_tag_ids',
+                'sale_delay', 'seller_ids', 'tax_string', 'create_date', 'standard_price', 'volume_uom_name',
+                'weight_uom_name', 'available_in_pos','description', 'attribute_line_ids', 'to_weight', 'pos_categ_id',
+                'location_id', 'display_name', 'product_variant_ids', 'volume', 'weight','active',
+
+            ]
+       
         # Read only selected fields
         data = result.read(fields_to_return)[0]
 
@@ -173,6 +226,27 @@ class Product(models.Model):
             if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
                 data[key] = value.isoformat() if value else None
 
+        # Replace relational fields with full object data
+        relational_fields = [
+            'uom_id', 'categ_id', 'taxes_id', 'pos_categ_id',
+            'uom_po_id', 'seller_ids', 'product_variant_ids', 
+            'location_id', 'product_tag_ids', 'attribute_line_ids'
+        ]
+
+        for field in relational_fields:
+            value = data.get(field)
+            if isinstance(value, list) and value:  # many2many or one2many
+                records = self.env[self.fields_get()[field]['relation']].browse(
+                    [v[0] if isinstance(v, tuple) else v for v in value]
+                )
+                data[field] = records.read()
+            elif isinstance(value, tuple) and value:  # many2one
+                record = self.env[self.fields_get()[field]['relation']].browse(value[0])
+                data[field] = record.read()[0] if record else None
+            elif isinstance(value, int):  # fallback for many2one as int
+                record = self.env[self.fields_get()[field]['relation']].browse(value)
+                data[field] = record.read()[0] if record else None        
+
         payload = {
             "operation": 0,
             "type": 1,
@@ -180,7 +254,10 @@ class Product(models.Model):
             "ids": result.ids,
             "data": data
         }
-        send_webhook(payload)
+
+        print("***************$$$$**************$$$$**************")
+        print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
+        # send_webhook(payload)
         return result
 
     def write(self, vals):
@@ -202,7 +279,7 @@ class Product(models.Model):
                 "ids": self.ids,
                 "data": data
             }
-            send_webhook(payload)
+            # send_webhook(payload)
         return result
 
     def unlink(self):
@@ -217,7 +294,7 @@ class Product(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            send_webhook(payload)
+            # send_webhook(payload)
         return result
 
 
@@ -233,20 +310,20 @@ class LoyaltyProgram(models.Model):
         print("working with 1")
         result = super().create(vals)
         # call the api for it fpr syncronization
-        data = result.read()[0]
+        # data = result.read()[0]
 
-        # Convert datetime fields to strings
-        for key, value in data.items():
-            if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                data[key] = value.isoformat() if value else None
+        # # Convert datetime fields to strings
+        # for key, value in data.items():
+        #     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
+        #         data[key] = value.isoformat() if value else None
 
-        payload = {
-            "operation": 0,
-            "type": 2,
-            "model": self._name,
-            "ids": result.ids,
-            "data": data
-        }
+        # payload = {
+        #     "operation": 0,
+        #     "type": 2,
+        #     "model": self._name,
+        #     "ids": result.ids,
+        #     "data": data
+        # }
         # send_webhook(payload)
         return result
 
@@ -310,20 +387,20 @@ class LoyaltyRule(models.Model):
     def create(self, vals):
         print("working with 2")
         result = super().create(vals)
-        data = result.read()[0]
+        # data = result.read()[0]
 
-        # Convert datetime fields to strings
-        for key, value in data.items():
-            if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                data[key] = value.isoformat() if value else None
+        # # Convert datetime fields to strings
+        # for key, value in data.items():
+        #     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
+        #         data[key] = value.isoformat() if value else None
 
-        payload = {
-            "operation": 0,
-            "type": 3,
-            "model": self._name,
-            "ids": result.ids,
-            "data": data
-        }
+        # payload = {
+        #     "operation": 0,
+        #     "type": 3,
+        #     "model": self._name,
+        #     "ids": result.ids,
+        #     "data": data
+        # }
         # send_webhook(payload)
         return result
     @api.model
@@ -427,7 +504,6 @@ class LoyaltyReward(models.Model):
         return self.env.cr.dictfetchall()
     def fetch_loyalty_data_by_program(self, program_id):
         query = """
-
             SELECT
                 lp.id AS program_id,
                 COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
@@ -510,7 +586,7 @@ class LoyaltyReward(models.Model):
         # # send_webhook(payload)
     
         print(result.program_id.id)
-        res = self.fetch_loyalty_data_by_program_local(result.program_id.id)
+        res = self.fetch_loyalty_data_by_program(result.program_id.id)
 
         data_list = []
 
@@ -531,36 +607,31 @@ class LoyaltyReward(models.Model):
                 "ids": [],
                 "data": data_list
             }
-        send_webhook(payload)
+        # send_webhook(payload)
         return result
 
     @api.model
     def write(self, vals):
         print(" updating 3 ")
         result = super().write(vals)
-        if result:
-            data_list = []
-            for record in self:
-                # Fetch all related reward data for this program
-                res = self.fetch_loyalty_data_by_program_local(record.id)
+        if result: 
 
-                for item in res:  # res is a list of dicts
-                    data = {}
-                    for key, value in item.items():
-                        if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                            data[key] = value.isoformat() if value else None
-                        else:
-                            data[key] = value
-                    data_list.append(data)
+            # call the api for it fpr syncronization
+            data = vals
+
+            # Convert datetime fields to strings
+            for key, value in data.items():
+                if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
+                    data[key] = value.isoformat() if value else None
 
             payload = {
-                "operation": 1,  # 1 for update
-                "type": 2,
-                "model": "loyalty.program",
+                "operation": 1,
+                "type": 4,
+                "model": self._name,
                 "ids": self.ids,
-                "data": data_list
+                "data": data
             }
-            send_webhook(payload)
+            # send_webhook(payload)
         return result
     @api.model
     def unlink(self):
@@ -760,6 +831,14 @@ class PosSyncController(http.Controller):
 
     @http.route('/pos/sync_orders', type='json', auth='public', methods=['POST'])
     def sync_orders(self):
+        
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+        
+
         user_id = self.get_user_id_by_name("App")
         if not user_id:
             return {"status": "error", "message": "User named 'App' not found"}
@@ -918,6 +997,12 @@ class PosSyncController(http.Controller):
 
     @http.route('/pos/refund_orders', type='json', auth='public', methods=['POST'])
     def refund_orders(self):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+        
         user_id = self.get_user_id_by_name("App")
         if not user_id:
             return {"status": "error", "message": "User named 'App' not found"}
@@ -1114,5 +1199,21 @@ class PosSyncController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             }
+        
+
+
+    @http.route('/api/auth/token', type='json', auth='public', methods=['POST'])
+    def get_token(self):
+        params = json.loads(request.httprequest.data)
+        username = params.get('username')
+        password = params.get('password')
+
+        user = request.env['auth.user.token'].sudo().search([('name', '=', username)], limit=1)
+        if user and user.check_password(password):
+            token = secrets.token_hex(32)
+            expiration = datetime.utcnow() + timedelta(hours=24)
+            user.sudo().write({'token': token, 'token_expiration': expiration})
+            return {'token': token, 'expires_at': expiration.isoformat()}
+        return {'error': 'Invalid credentials'}, 401    
             
         

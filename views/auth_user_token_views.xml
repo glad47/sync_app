@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data>
+  <record id="view_auth_user_token_form" model="ir.ui.view">
+    <field name="name">auth.user.token.form</field>
+    <field name="model">auth.user.token</field>
+    <field name="arch" type="xml">
+      <form string="API User Token">
+        <sheet>
+          <group>
+            <field name="name"/>
+            <field name="password_hash"/>
+            <field name="token" readonly="1"/>
+            <field name="token_expiration" readonly="1"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="view_auth_user_token_tree" model="ir.ui.view">
+    <field name="name">auth.user.token.tree</field>
+    <field name="model">auth.user.token</field>
+    <field name="arch" type="xml">
+      <tree string="API Users">
+        <field name="name"/>
+        <field name="token"/>
+        <field name="token_expiration"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="action_auth_user_token" model="ir.actions.act_window">
+    <field name="name">API Users</field>
+    <field name="res_model">auth.user.token</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  
+  </data>
+</odoo>

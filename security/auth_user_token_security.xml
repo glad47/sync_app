@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Module Category -->
+    <record model="ir.module.category" id="sync_app.module_category_api_access">
+        <field name="name">API Access</field>
+        <field name="description">Access control for API users and administrators.</field>
+        <field name="sequence">22</field>
+    </record>
+
+    <!-- API Admin Group -->
+    <record id="group_api_admin" model="res.groups">
+        <field name="name">API Administrator</field>
+        <field name="category_id" ref="sync_app.module_category_api_access"/>
+        <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+    </record>
+
+    <!-- API User Group -->
+    <record id="group_api_user" model="res.groups">
+        <field name="name">API User</field>
+        <field name="category_id" ref="sync_app.module_category_api_access"/>
+    </record>
+
+    <data noupdate="1">
+        <record id="base.user_admin" model="res.users">
+            <field name="groups_id" eval="[(4, ref('sync_app.group_api_admin'))]"/>
+        </record>
+
+        <record id="base.default_user" model="res.users">
+            <field name="groups_id" eval="[(4, ref('sync_app.group_api_user'))]"/>
+        </record>
+    </data>
+
+</odoo>

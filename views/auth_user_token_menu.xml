@@ -1,0 +1,16 @@
+<odoo>
+    <!-- Root Menu -->
+    <record id="menu_auth_user_token_root" model="ir.ui.menu">
+        <field name="name">API Access</field>
+        <field name="sequence" eval="10"/>
+        <field name="groups_id" eval="[(4, ref('sync_app.group_api_admin')), (4, ref('sync_app.group_api_user'))]"/>
+    </record>
+
+    <!-- Users Submenu -->
+    <record id="menu_auth_user_token" model="ir.ui.menu">
+        <field name="name">Users</field>
+        <field name="parent_id" ref="menu_auth_user_token_root"/>
+        <field name="action" ref="action_auth_user_token"/>
+        <field name="groups_id" eval="[(4, ref('sync_app.group_api_admin'))]"/>
+    </record>
+</odoo>

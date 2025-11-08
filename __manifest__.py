@@ -7,6 +7,13 @@
     'depends': [
         'pos_loyalty'
     ],
-    'auto_install': False,
-    'application': False,
+    'data': [
+        'security/auth_user_token_security.xml',
+        'security/ir.model.access.csv',
+        'views/auth_user_token_menu.xml',
+        'views/auth_user_token_views.xml',
+    ],
+    'installable': True,
+    'application': True,
+    'license': 'LGPL-3',
 }
