@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 _logger = logging.getLogger(__name__)
 
 
-
+# the is the webhook that will ebe called to send the data to be sync with the application you get me, so we need to make sure that 
+# the response is descriptive you get me 
 def webhook_worker(payload):
     url = 'https://p.qeu.app/api/odoo/webhook'
     headers = {
@@ -145,7 +146,7 @@ class ProductTemplate(models.Model):
             # print(payload)
 
 
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
     def write(self, vals):
@@ -172,7 +173,7 @@ class ProductTemplate(models.Model):
                     "ids": self.ids,
                     "data": data
                 }
-                # send_webhook(payload)
+                send_webhook(payload)
         return result
 
     def unlink(self):
@@ -194,7 +195,7 @@ class ProductTemplate(models.Model):
                 "data": self.ids
             }
             
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
 
@@ -257,7 +258,7 @@ class Product(models.Model):
 
         print("***************$$$$**************$$$$**************")
         print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
-        # send_webhook(payload)
+        send_webhook(payload)
         return result
 
     def write(self, vals):
@@ -279,7 +280,7 @@ class Product(models.Model):
                 "ids": self.ids,
                 "data": data
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
     def unlink(self):
@@ -294,11 +295,11 @@ class Product(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
 
-
+# this is the LoyaltyProgram
 class LoyaltyProgram(models.Model):
     _inherit = 'loyalty.program'
 
@@ -329,6 +330,7 @@ class LoyaltyProgram(models.Model):
 
     def write(self, vals):
         print(" updating 1 ")
+        
         if 'active' in vals and not vals.get('active', False) or ('pos_ok' in vals and not vals.get('pos_ok')):
             if 'date_to' in vals and vals.get('date_to') and fields.Date.to_date(vals.get('date_to')) >= fields.Date.today():
                 raise UserError(_('You can not Archive or remove from POS a program that is still valid'))
@@ -358,7 +360,7 @@ class LoyaltyProgram(models.Model):
                 "ids": self.ids,
                 "data": data
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
     def unlink(self):
@@ -373,7 +375,7 @@ class LoyaltyProgram(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
     
 
@@ -424,7 +426,7 @@ class LoyaltyRule(models.Model):
                 "ids": self.ids,
                 "data": data
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
     @api.model
     def unlink(self):
@@ -439,7 +441,7 @@ class LoyaltyRule(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
 # programs = env['loyalty.program'].search([])
@@ -607,7 +609,7 @@ class LoyaltyReward(models.Model):
                 "ids": [],
                 "data": data_list
             }
-        # send_webhook(payload)
+        send_webhook(payload)
         return result
 
     @api.model
@@ -631,13 +633,12 @@ class LoyaltyReward(models.Model):
                 "ids": self.ids,
                 "data": data
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
     @api.model
     def unlink(self):
         result = super().unlink()
         if result: 
-
             payload = {
                 "operation": 2,
                 "type": 4,
@@ -645,17 +646,18 @@ class LoyaltyReward(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-            # send_webhook(payload)
+            send_webhook(payload)
         return result
 
 
 
 
 class PosSyncController(http.Controller):
+    # we define a pos, user, stock for the App, also we make the payment method to be the Bank 
+    # so that any order from the App shall its payment method be the BAnk 
 
 
-
-
+    # get the user by the id named app 
     def get_user_id_by_name(self, username="App"):
         user = request.env['res.users'].sudo().search([('name', '=', username)], limit=1)
         if not user:
@@ -664,7 +666,7 @@ class PosSyncController(http.Controller):
 
 
 
-
+    # generate bank transfer statment 
     def generate_bank_transfer_statement(self, amount, method_name="Bank"):
         # Search for the payment method by name
         PaymentMethod = self.env['pos.payment.method'].sudo()
@@ -727,10 +729,11 @@ class PosSyncController(http.Controller):
     def generate_reward_code(self):
         return (str(random.random() + 1)[2:])
 
+    
     def generate_temp_coupon_id(self):
         return -(int(time.time() * 1000) % 100000)
-
-
+   
+    # this is used to build the normal product line 
     def build_normal_product_line(self, product, qty, price_unit, discount, tax_ids):
         return  [
             0,
@@ -753,6 +756,8 @@ class PosSyncController(http.Controller):
         }
         ]
 
+
+    # this is used for the reward order line so as is expected
     def build_reward_product_line(self, product, qty, price_unit, discount, tax_ids, reward_id, reward_product_id, points_cost):
         reward_identifier_code = self.generate_reward_code()
         coupon_id = self.generate_temp_coupon_id()
@@ -775,12 +780,12 @@ class PosSyncController(http.Controller):
                 "price_extra": 0,
                 "price_manually_set": False,
                 "price_automatically_set": True,
-                "is_reward_line": True,
-                "reward_id": reward_id,
-                "reward_product_id": reward_product_id,
-                "coupon_id": coupon_id,
+                "is_reward_line": True,   # this is to check to is the reward line 
+                "reward_id": reward_id, # this is the reward_id
+                "reward_product_id": reward_product_id, # this is the reward_product_id
+                "coupon_id": coupon_id, # this is the copoun id
                 "reward_identifier_code": reward_identifier_code,
-                "points_cost": points_cost,
+                "points_cost": points_cost,   # this is the points_cost
                 "eWalletGiftCardProgramId": None
             }
         ]
@@ -792,7 +797,7 @@ class PosSyncController(http.Controller):
             if reward.exists() and reward.program_id:
                 applied_rules = reward.program_id.rule_ids.ids
 
-
+        # this is for the coupon
         coupon_point_change = {
             str(coupon_id): {
                 "points": points_cost or 0,
@@ -806,7 +811,8 @@ class PosSyncController(http.Controller):
         return reward_line, coupon_point_change
 
    
-
+    
+    # this function used to build the order metadata
     def build_order_metadata(self, order_id, partner_id, session_id, user_id):
         return {
             "pos_session_id": session_id,
@@ -828,7 +834,8 @@ class PosSyncController(http.Controller):
             "codeActivatedCoupons": []
         }
     
-
+    # this is the to sync orders so that order from the application is send to the odoo and can be stored and tracked also include creating 
+    # account.move 
     @http.route('/pos/sync_orders', type='json', auth='public', methods=['POST'])
     def sync_orders(self):
         
@@ -980,7 +987,7 @@ class PosSyncController(http.Controller):
         # }
 
 
-
+      
         try:
             order_model = request.env['pos.order'].sudo()
             result = order_model.create_from_ui(all_prepared_orders, draft)
@@ -994,7 +1001,9 @@ class PosSyncController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             }
+    
 
+    # this is the refunded_orders you can refund by normal or by all 
     @http.route('/pos/refund_orders', type='json', auth='public', methods=['POST'])
     def refund_orders(self):
         token = request.httprequest.headers.get('Authorization')
@@ -1060,7 +1069,7 @@ class PosSyncController(http.Controller):
             prepared_lines = []
             coupon_point_changes = {}
 
-            # 🔍 Find original order lines for refund matching
+            # Find original order lines for refund matching
             refunded_order = request.env['pos.order'].sudo().search([('pos_reference', '=', refunded_uid)], limit=1)
             refunded_lines = request.env['pos.order.line'].sudo().search([
                     ('order_id', '=', refunded_order.id)
@@ -1201,7 +1210,7 @@ class PosSyncController(http.Controller):
             }
         
 
-
+    # this is the api for the token so that it can be called to get token so can access the end point
     @http.route('/api/auth/token', type='json', auth='public', methods=['POST'])
     def get_token(self):
         params = json.loads(request.httprequest.data)
