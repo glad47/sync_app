@@ -734,14 +734,14 @@ class PosSyncController(http.Controller):
         return -(int(time.time() * 1000) % 100000)
    
     # this is used to build the normal product line 
-    def build_normal_product_line(self, product, qty, price_unit, discount, tax_ids):
+    def build_normal_product_line(self, product, qty, price_unit, price_subtotal, price_subtotal_incl, discount, tax_ids):
         return  [
             0,
             0, {
             "qty": qty,
             "price_unit": price_unit,
-            "price_subtotal": qty * price_unit,
-            "price_subtotal_incl": qty * price_unit * 1.15,  # Example tax
+            "price_subtotal": price_subtotal,
+            "price_subtotal_incl": price_subtotal_incl,
             "discount": discount,
             "product_id": product.id,
             "tax_ids": [[6, False, tax_ids]],
@@ -758,7 +758,7 @@ class PosSyncController(http.Controller):
 
 
     # this is used for the reward order line so as is expected
-    def build_reward_product_line(self, product, qty, price_unit, discount, tax_ids, reward_id, reward_product_id, points_cost):
+    def build_reward_product_line(self, product, qty, price_unit,price_subtotal, price_subtotal_incl, discount, tax_ids, reward_id, reward_product_id, points_cost):
         reward_identifier_code = self.generate_reward_code()
         coupon_id = self.generate_temp_coupon_id()
 
@@ -768,8 +768,8 @@ class PosSyncController(http.Controller):
             {
                 "qty": qty,
                 "price_unit": price_unit,
-                "price_subtotal": qty * price_unit,
-                "price_subtotal_incl": qty * price_unit * 1.15,
+                "price_subtotal": price_subtotal,
+                "price_subtotal_incl": price_subtotal_incl,
                 "discount": discount,
                 "product_id": product.id,
                 "tax_ids": [[6, False, tax_ids]],
@@ -903,10 +903,15 @@ class PosSyncController(http.Controller):
             coupon_point_changes = {}
 
             for line in simplified_lines:
-                qty = line.get('qty')
-                price_unit = line.get('price_unit')
-                product_id = line.get('product_id')
+                qty = line.get('qty', 0)
+                product_id = line.get('product_id', 0)
+                price_unit = line.get('price_unit', 0)
+                price_subtotal = line.get('price_subtotal', 0)
+
+                price_subtotal_incl = line.get('price_subtotal_incl', 0)
                 discount = line.get('discount', 0)
+
+                
 
                 product = request.env['product.product'].sudo().browse(product_id)
                 if not product.exists():
@@ -920,6 +925,9 @@ class PosSyncController(http.Controller):
                     ('company_id', '=', request.env.company.id)
                 ]).ids
 
+                print("*********$$$$$$tax_ids$$$$$$**********")
+                print(tax_ids)
+
                 is_reward_line = line.get('is_reward_line', False)
 
                 if is_reward_line:
@@ -928,14 +936,15 @@ class PosSyncController(http.Controller):
                     points_cost = line.get('points_cost')
 
                     reward_line, coupon_change = self.build_reward_product_line(
-                        product, qty, price_unit, discount, tax_ids,
+                        
+                        product, qty, price_unit, price_subtotal, price_subtotal_incl, discount, tax_ids,
                         reward_id, reward_product_id, points_cost
                     )
 
                     prepared_lines.append(reward_line)
                     coupon_point_changes.update(coupon_change)
                 else:
-                    normal_line = self.build_normal_product_line(product, qty, price_unit, discount, tax_ids)
+                    normal_line = self.build_normal_product_line(product, qty, price_unit,price_subtotal, price_subtotal_incl, discount, tax_ids)
                     prepared_lines.append(normal_line)
 
             # Generate statement_ids using Bank method
@@ -1079,6 +1088,9 @@ class PosSyncController(http.Controller):
             for line in simplified_lines:
                 qty = line.get('qty')
                 price_unit = line.get('price_unit')
+                price_subtotal = line.get('price_subtotal', 0)
+
+                price_subtotal_incl = line.get('price_subtotal_incl', 0)
                 product_id = line.get('product_id')
                 discount = line.get('discount', 0)
 
@@ -1144,14 +1156,14 @@ class PosSyncController(http.Controller):
                     points_cost = line.get('points_cost')
 
                     reward_line, coupon_change = self.build_reward_product_line(
-                        product, qty, price_unit, discount, tax_ids,
+                        product, qty, price_unit,price_subtotal, price_subtotal_incl, discount, tax_ids,
                         reward_id, reward_product_id, points_cost
                     )
                     reward_line[2]['refunded_orderline_id'] = refunded_line_id
                     prepared_lines.append(reward_line)
                     coupon_point_changes.update(coupon_change)
                 else:
-                    normal_line = self.build_normal_product_line(product, qty, price_unit, discount, tax_ids)
+                    normal_line = self.build_normal_product_line(product, qty, price_unit,price_subtotal, price_subtotal_incl, discount, tax_ids)
                     normal_line[2]['refunded_orderline_id'] = refunded_line_id
                     prepared_lines.append(normal_line)
 
@@ -1197,7 +1209,7 @@ class PosSyncController(http.Controller):
 
         try:
             order_model = request.env['pos.order'].sudo()
-            result = order_model.create_from_ui(all_prepared_orders, draft)
+            result = order_model.with_context(is_refund=True).create_from_ui(all_prepared_orders, draft)
             return {
                 'status': 'success',
                 'processed_orders': result
