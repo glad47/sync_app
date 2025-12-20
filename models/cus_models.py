@@ -1238,3 +1238,320 @@ class PosSyncController(http.Controller):
         return {'error': 'Invalid credentials'}, 401    
             
         
+# Add this to your existing code
+
+class PurchaseOrder(models.Model):
+    _inherit = 'purchase.order'
+
+    write_date = fields.Datetime(
+        'Last Updated on', index=True, help="Date on which the record was last updated.")
+
+    def button_confirm(self):
+        """Override confirm to send webhook when picking type is for Inventory App"""
+        result = super().button_confirm()
+        
+        for order in self:
+            # Check if the picking type name matches "App" or your specific operation type
+            print("#$#$#$#$#$#$#$#$#$#$#$#$##$@")
+            print(order.picking_type_id.warehouse_id.name)
+            print(order.picking_type_id.warehouse_id.name)
+            if order.picking_type_id and order.picking_type_id.warehouse_id.name == 'App':
+                print("********#### Found App Picking Type ####*************")
+                print(f"PO: {order.name}, Picking Type: {order.picking_type_id.name}, WH: {order.picking_type_id.warehouse_id.name}")
+                self._send_purchase_order_webhook(order)
+        
+        return result
+
+    def _send_purchase_order_webhook(self, order):
+        """Send purchase order details to webhook"""
+        
+        # Prepare order lines data
+        order_lines = []
+        for line in order.order_line:
+            line_data = {
+                'id': line.id,
+                'product_id': line.product_id.id,
+                'product_name': line.product_id.name,
+                'product_barcode': line.product_id.barcode,
+                'product_code': line.product_id.default_code,
+                'quantity': line.product_qty,
+                'qty_received': line.qty_received,
+                'sales_price': line.sales_price,
+                'qty_to_receive': line.product_qty - line.qty_received,
+                'price_unit': line.price_unit,
+                'price_subtotal': line.price_subtotal,
+                'tax_ids': line.taxes_id.ids,
+                'uom_id': line.product_uom.id,
+                'uom_name': line.product_uom.name,
+            }
+            order_lines.append(line_data)
+        
+        # Prepare partner data
+        partner_data = {
+            'id': order.partner_id.id,
+            'name': order.partner_id.name,
+            'phone': order.partner_id.phone,
+            'email': order.partner_id.email,
+            'vat': order.partner_id.vat,
+        }
+        
+        # Prepare picking type data
+        picking_type_data = {
+            'id': order.picking_type_id.id,
+            'name': order.picking_type_id.name,
+            'warehouse_id': order.picking_type_id.warehouse_id.id if order.picking_type_id.warehouse_id else None,
+            'warehouse_name': order.picking_type_id.warehouse_id.name if order.picking_type_id.warehouse_id else None,
+        }
+        
+        # Prepare main order data
+        order_data = {
+            'id': order.id,
+            'name': order.name,
+            'state': order.state,
+            'date_order': order.date_order.isoformat() if order.date_order else None,
+            'date_planned': order.date_planned.isoformat() if order.date_planned else None,
+            'partner_id': partner_data,
+            'picking_type_id': picking_type_data,
+            'amount_untaxed': order.amount_untaxed,
+            'amount_tax': order.amount_tax,
+            'amount_total': order.amount_total,
+            'currency_id': order.currency_id.id,
+            'currency_name': order.currency_id.name,
+            'order_lines': order_lines,
+            'notes': order.notes or ''
+        }
+        
+        payload = {
+            "operation": 6,  # Purchase Order Confirmed
+            "type": 5,  # Purchase Order type
+            "model": self._name,
+            "ids": [order.id],
+            "data": order_data
+        }
+        
+        print("***************$$$$$ PURCHASE ORDER WEBHOOK $$$$$**************")
+        print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
+        
+        send_webhook(payload)
+
+
+class PurchaseOrderReceivingController(http.Controller):
+    """Controller for receiving purchase order items via API"""
+
+    @http.route('/api/purchase/receive', type='json', auth='public', methods=['POST'])
+    def receive_purchase_order(self):
+        """
+        API to receive purchase order items
+        Expected payload:
+        {
+            "po_name": "PO00123",
+            "lines": [
+                {
+                    "line_id": 1,
+                    "qty_received": 10.0
+                },
+                {
+                    "line_id": 2,
+                    "qty_received": 5.0
+                }
+            ]
+        }
+        """
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            po_name = data.get('po_name')
+            lines_to_receive = data.get('lines', [])
+
+            if not po_name:
+                return {
+                    'status': 'error',
+                    'message': 'Purchase order name is required'
+                }
+
+            if not lines_to_receive:
+                return {
+                    'status': 'error',
+                    'message': 'No lines to receive'
+                }
+
+            # Find the purchase order
+            purchase_order = request.env['purchase.order'].sudo().search([
+                ('name', '=', po_name)
+            ], limit=1)
+
+            if not purchase_order:
+                return {
+                    'status': 'error',
+                    'message': f'Purchase order {po_name} not found'
+                }
+
+            if purchase_order.state not in ['purchase', 'done']:
+                return {
+                    'status': 'error',
+                    'message': f'Purchase order {po_name} is not confirmed'
+                }
+
+            # Process each line
+            received_lines = []
+            errors = []
+
+            for line_data in lines_to_receive:
+                line_id = line_data.get('line_id')
+                qty_to_receive = line_data.get('qty_received', 0)
+
+                if qty_to_receive <= 0:
+                    errors.append(f'Line {line_id}: Invalid quantity')
+                    continue
+
+                # Find the purchase order line
+                po_line = request.env['purchase.order.line'].sudo().search([
+                    ('id', '=', line_id),
+                    ('order_id', '=', purchase_order.id)
+                ], limit=1)
+
+                if not po_line:
+                    errors.append(f'Line {line_id}: Not found in purchase order {po_name}')
+                    continue
+
+                # Check if qty exceeds ordered quantity
+                remaining_qty = po_line.product_qty - po_line.qty_received
+                if qty_to_receive > remaining_qty:
+                    errors.append(
+                        f'Line {line_id}: Quantity to receive ({qty_to_receive}) '
+                        f'exceeds remaining quantity ({remaining_qty})'
+                    )
+                    continue
+
+                # Find the related stock picking (receipt)
+                pickings = purchase_order.picking_ids.filtered(
+                    lambda p: p.state not in ['done', 'cancel']
+                )
+
+                if not pickings:
+                    errors.append(f'Line {line_id}: No receipt found for this purchase order')
+                    continue
+
+                # Update the stock move
+                for picking in pickings:
+                    moves = picking.move_ids.filtered(
+                        lambda m: m.purchase_line_id.id == line_id and m.state not in ['done', 'cancel']
+                    )
+
+                    for move in moves:
+                        # Set the quantity done
+                        move_qty = min(qty_to_receive, move.product_uom_qty)
+                        move.write({'quantity_done': move_qty})
+                        
+                        received_lines.append({
+                            'line_id': line_id,
+                            'product_id': po_line.product_id.id,
+                            'product_name': po_line.product_id.name,
+                            'qty_received': move_qty,
+                            'picking_id': picking.id,
+                            'picking_name': picking.name
+                        })
+
+                        qty_to_receive -= move_qty
+                        if qty_to_receive <= 0:
+                            break
+
+            # Validate pickings that have all quantities set
+            validated_pickings = []
+            for picking in purchase_order.picking_ids.filtered(
+                lambda p: p.state not in ['done', 'cancel']
+            ):
+                # Check if all moves have quantity_done > 0
+                if all(move.quantity_done > 0 for move in picking.move_ids):
+                    try:
+                        # Validate the picking
+                        picking.button_validate()
+                        validated_pickings.append({
+                            'id': picking.id,
+                            'name': picking.name,
+                            'state': picking.state
+                        })
+                    except Exception as e:
+                        errors.append(f'Picking {picking.name}: Validation failed - {str(e)}')
+
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'purchase_order': {
+                    'id': purchase_order.id,
+                    'name': purchase_order.name,
+                    'state': purchase_order.state
+                },
+                'received_lines': received_lines,
+                'validated_pickings': validated_pickings,
+                'errors': errors if errors else None
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to receive purchase order items")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+
+    @http.route('/api/purchase/order/<string:po_name>', type='json', auth='public', methods=['GET'])
+    def get_purchase_order_details(self, po_name):
+        """Get purchase order details for receiving"""
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            purchase_order = request.env['purchase.order'].sudo().search([
+                ('name', '=', po_name)
+            ], limit=1)
+
+            if not purchase_order:
+                return {
+                    'status': 'error',
+                    'message': f'Purchase order {po_name} not found'
+                }
+
+            lines_data = []
+            for line in purchase_order.order_line:
+                lines_data.append({
+                    'line_id': line.id,
+                    'product_id': line.product_id.id,
+                    'product_name': line.product_id.name,
+                    'product_barcode': line.product_id.barcode,
+                    'product_code': line.product_id.default_code,
+                    'qty_ordered': line.product_qty,
+                    'qty_received': line.qty_received,
+                    'qty_remaining': line.product_qty - line.qty_received,
+                    'price_unit': line.price_unit,
+                    'uom_name': line.product_uom.name
+                })
+
+            return {
+                'status': 'success',
+                'purchase_order': {
+                    'id': purchase_order.id,
+                    'name': purchase_order.name,
+                    'state': purchase_order.state,
+                    'partner_name': purchase_order.partner_id.name,
+                    'date_order': purchase_order.date_order.isoformat() if purchase_order.date_order else None,
+                    'amount_total': purchase_order.amount_total,
+                    'lines': lines_data
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get purchase order details")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
