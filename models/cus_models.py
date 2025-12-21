@@ -1555,3 +1555,1217 @@ class PurchaseOrderReceivingController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             }
+
+
+
+
+
+
+class StockPicking(models.Model):
+    _inherit = 'stock.picking'
+
+    @api.model
+    def create(self, vals):
+        """Override create to send webhook when receipt is created for App warehouse"""
+        result = super().create(vals)
+        
+        for picking in result:
+            if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
+                warehouse = picking.picking_type_id.warehouse_id
+                if warehouse and warehouse.name == 'App':
+                    print("***************$$$$ STOCK RECEIPT CREATED FOR APP $$$$**************")
+                    self._send_receipt_webhook(picking, operation=0)
+        
+        return result
+
+    def write(self, vals):
+        """Override write to send webhook when receipt is updated"""
+        result = super().write(vals)
+        
+        for picking in self:
+            if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
+                warehouse = picking.picking_type_id.warehouse_id
+                if warehouse and warehouse.name == 'App':
+                    if 'state' in vals or 'move_ids' in vals or 'move_line_ids' in vals:
+                        print("***************$$$$ STOCK RECEIPT UPDATED FOR APP $$$$**************")
+                        self._send_receipt_webhook(picking, operation=1)
+        
+        return result
+
+    # def button_validate(self):
+    #     """Override validate to send webhook when receipt is validated"""
+    #     result = super().button_validate()
+        
+    #     for picking in self:
+    #         if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
+    #             warehouse = picking.picking_type_id.warehouse_id
+    #             if warehouse and warehouse.name == 'App':
+    #                 print("***************$$$$ STOCK RECEIPT VALIDATED FOR APP $$$$**************")
+    #                 self._send_receipt_webhook(picking, operation=3)
+        
+    #     return result
+
+    def _send_receipt_webhook(self, picking, operation=0):
+        """Send receipt details to webhook"""
+        
+        move_lines = []
+        for move in picking.move_ids:
+            move_data = {
+                'id': move.id,
+                'product_id': move.product_id.id,
+                'product_name': move.product_id.name,
+                'product_barcode': move.product_id.barcode,
+                'product_code': move.product_id.default_code,
+                'quantity_ordered': move.product_uom_qty,
+                'quantity_done': move.quantity_done,
+                'quantity_remaining': move.product_uom_qty - move.quantity_done,
+                'uom_id': move.product_uom.id,
+                'uom_name': move.product_uom.name,
+                'state': move.state,
+                'purchase_line_id': move.purchase_line_id.id if move.purchase_line_id else None,
+            }
+            move_lines.append(move_data)
+
+        partner_data = None
+        if picking.partner_id:
+            partner_data = {
+                'id': picking.partner_id.id,
+                'name': picking.partner_id.name,
+                'phone': picking.partner_id.phone,
+                'email': picking.partner_id.email,
+            }
+
+        picking_data = {
+            'id': picking.id,
+            'name': picking.name,
+            'state': picking.state,
+            'origin': picking.origin,
+            'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+            'date_done': picking.date_done.isoformat() if picking.date_done else None,
+            'create_date': picking.create_date.isoformat() if picking.create_date else None,
+            'partner': partner_data,
+            'warehouse_id': picking.picking_type_id.warehouse_id.id if picking.picking_type_id.warehouse_id else None,
+            'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
+            'picking_type_name': picking.picking_type_id.name,
+            'purchase_order_id': picking.purchase_id.id if picking.purchase_id else None,
+            'purchase_order_name': picking.purchase_id.name if picking.purchase_id else None,
+            'move_lines': move_lines,
+        }
+
+        payload = {
+            "operation": operation,  # 0=create, 1=update, 3=validated
+            "type": 7,  # Stock Picking/Receipt type
+            "model": self._name,
+            "ids": [picking.id],
+            "data": picking_data
+        }
+
+        print("***************$$$$$ STOCK RECEIPT WEBHOOK $$$$$**************")
+        print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
+
+        send_webhook(payload)
+
+
+
+
+
+class StockReceivingController(http.Controller):
+
+    @http.route('/api/stock/receive', type='json', auth='public', methods=['POST'])
+    def receive_stock_picking(self):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            picking_name = data.get('picking_name')
+            lines_to_receive = data.get('lines', [])
+
+            if not picking_name:
+                return {'status': 'error', 'message': 'Stock picking name is required'}
+
+            if not lines_to_receive:
+                return {'status': 'error', 'message': 'No lines to receive'}
+
+            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+
+            if not picking:
+                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+
+            if picking.state == 'done':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is already done'}
+
+            if picking.state == 'cancel':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
+
+            received_lines = []
+            errors = []
+
+            for line_data in lines_to_receive:
+                move_id = line_data.get('move_id')
+                qty_to_receive = line_data.get('qty_received', 0)
+
+                if qty_to_receive <= 0:
+                    errors.append(f'Move {move_id}: Invalid quantity')
+                    continue
+
+                move = request.env['stock.move'].sudo().search([
+                    ('id', '=', move_id),
+                    ('picking_id', '=', picking.id)
+                ], limit=1)
+
+                if not move:
+                    errors.append(f'Move {move_id}: Not found in picking {picking_name}')
+                    continue
+
+                remaining_qty = move.product_uom_qty - move.quantity_done
+                if qty_to_receive > remaining_qty:
+                    errors.append(f'Move {move_id}: Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})')
+                    continue
+
+                move.write({'quantity_done': move.quantity_done + qty_to_receive})
+
+                received_lines.append({
+                    'move_id': move_id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'qty_received': qty_to_receive,
+                    'total_qty_done': move.quantity_done,
+                    'qty_remaining': move.product_uom_qty - move.quantity_done,
+                })
+
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'picking': {'id': picking.id, 'name': picking.name, 'state': picking.state},
+                'received_lines': received_lines,
+                'errors': errors if errors else None
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to receive stock picking items")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/stock/receive/single', type='json', auth='public', methods=['POST'])
+    def receive_single_line(self):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            picking_name = data.get('picking_name')
+            move_id = data.get('move_id')
+            qty_to_receive = data.get('qty_received', 0)
+
+            if not picking_name:
+                return {'status': 'error', 'message': 'Stock picking name is required'}
+
+            if not move_id:
+                return {'status': 'error', 'message': 'Move ID is required'}
+
+            if qty_to_receive <= 0:
+                return {'status': 'error', 'message': 'Quantity must be greater than 0'}
+
+            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+
+            if not picking:
+                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+
+            if picking.state == 'done':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is already done'}
+
+            if picking.state == 'cancel':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
+
+            move = request.env['stock.move'].sudo().search([
+                ('id', '=', move_id),
+                ('picking_id', '=', picking.id)
+            ], limit=1)
+
+            if not move:
+                return {'status': 'error', 'message': f'Move {move_id} not found in picking {picking_name}'}
+
+            remaining_qty = move.product_uom_qty - move.quantity_done
+            if qty_to_receive > remaining_qty:
+                return {'status': 'error', 'message': f'Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})'}
+
+            move.write({'quantity_done': move.quantity_done + qty_to_receive})
+
+            return {
+                'status': 'success',
+                'picking': {'id': picking.id, 'name': picking.name, 'state': picking.state},
+                'received_line': {
+                    'move_id': move_id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty_received': qty_to_receive,
+                    'total_qty_done': move.quantity_done,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_remaining': move.product_uom_qty - move.quantity_done,
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to receive single stock move line")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/stock/picking/<string:picking_name>', type='json', auth='public', methods=['GET'])
+    def get_picking_details(self, picking_name):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+
+            if not picking:
+                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+
+            moves_data = []
+            for move in picking.move_ids:
+                moves_data.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'product_code': move.product_id.default_code,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_done': move.quantity_done,
+                    'qty_remaining': move.product_uom_qty - move.quantity_done,
+                    'uom_name': move.product_uom.name,
+                    'state': move.state
+                })
+
+            return {
+                'status': 'success',
+                'picking': {
+                    'id': picking.id,
+                    'name': picking.name,
+                    'state': picking.state,
+                    'origin': picking.origin,
+                    'partner_name': picking.partner_id.name if picking.partner_id else None,
+                    'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+                    'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
+                    'moves': moves_data
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get stock picking details")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/stock/picking/validate', type='json', auth='public', methods=['POST'])
+    def validate_picking(self):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            picking_name = data.get('picking_name')
+
+            if not picking_name:
+                return {'status': 'error', 'message': 'Stock picking name is required'}
+
+            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+
+            if not picking:
+                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+
+            if picking.state == 'done':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is already validated'}
+
+            if picking.state == 'cancel':
+                return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
+
+            if not any(move.quantity_done > 0 for move in picking.move_ids):
+                return {'status': 'error', 'message': 'No quantities have been received yet'}
+
+            picking.button_validate()
+
+            return {
+                'status': 'success',
+                'picking': {
+                    'id': picking.id,
+                    'name': picking.name,
+                    'state': picking.state,
+                    'date_done': picking.date_done.isoformat() if picking.date_done else None
+                },
+                'message': f'Stock picking {picking_name} has been validated'
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to validate stock picking")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/stock/pickings/pending', type='json', auth='public', methods=['GET'])
+    def get_pending_pickings(self):
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            warehouse = request.env['stock.warehouse'].sudo().search([('name', '=', 'App')], limit=1)
+
+            if not warehouse:
+                return {'status': 'error', 'message': 'App warehouse not found'}
+
+            pickings = request.env['stock.picking'].sudo().search([
+                ('picking_type_id.warehouse_id', '=', warehouse.id),
+                ('picking_type_id.code', '=', 'incoming'),
+                ('state', 'not in', ['done', 'cancel'])
+            ])
+
+            pickings_data = []
+            for picking in pickings:
+                total_qty = sum(move.product_uom_qty for move in picking.move_ids)
+                done_qty = sum(move.quantity_done for move in picking.move_ids)
+                
+                pickings_data.append({
+                    'id': picking.id,
+                    'name': picking.name,
+                    'state': picking.state,
+                    'origin': picking.origin,
+                    'partner_name': picking.partner_id.name if picking.partner_id else None,
+                    'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+                    'total_products': len(picking.move_ids),
+                    'total_qty': total_qty,
+                    'done_qty': done_qty,
+                    'progress_percent': round((done_qty / total_qty * 100) if total_qty > 0 else 0, 2)
+                })
+
+            return {
+                'status': 'success',
+                'warehouse': {'id': warehouse.id, 'name': warehouse.name},
+                'pickings': pickings_data,
+                'total_count': len(pickings_data)
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get pending pickings")
+            return {'status': 'error', 'message': str(e)}
+
+
+
+# ============================================
+# WAREHOUSE TRANSFER CONFIGURATION
+# ============================================
+# Map warehouse_id to contact_id (partner_id)
+# Format: {warehouse_id: contact_id}
+WAREHOUSE_CONTACT_MAP = {
+    2: 10,   # Warehouse ID 2 -> Contact/Partner ID 10
+    3: 15,   # Warehouse ID 3 -> Contact/Partner ID 15
+    4: 20,   # Warehouse ID 4 -> Contact/Partner ID 20
+    # Add more mappings as needed
+}
+
+
+class WarehouseController(http.Controller):
+    """Controller for warehouse management and inter-warehouse transfers"""
+
+    # ============================================
+    # WAREHOUSE LISTING APIs
+    # ============================================
+
+    @http.route('/api/warehouses', type='json', auth='public', methods=['GET'])
+    def get_all_warehouses(self):
+        """Get all warehouses with their details"""
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            warehouses = request.env['stock.warehouse'].sudo().search([])
+
+            warehouses_data = []
+            for wh in warehouses:
+                # Get mapped contact for this warehouse
+                contact_id = WAREHOUSE_CONTACT_MAP.get(wh.id)
+                contact_name = None
+                if contact_id:
+                    contact = request.env['res.partner'].sudo().browse(contact_id)
+                    if contact.exists():
+                        contact_name = contact.name
+
+                warehouses_data.append({
+                    'id': wh.id,
+                    'name': wh.name,
+                    'code': wh.code,
+                    'company_id': wh.company_id.id,
+                    'company_name': wh.company_id.name,
+                    'lot_stock_id': wh.lot_stock_id.id if wh.lot_stock_id else None,
+                    'lot_stock_name': wh.lot_stock_id.complete_name if wh.lot_stock_id else None,
+                    'mapped_contact_id': contact_id,
+                    'mapped_contact_name': contact_name,
+                    'active': wh.active,
+                })
+
+            return {
+                'status': 'success',
+                'warehouses': warehouses_data,
+                'total_count': len(warehouses_data)
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get warehouses")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/warehouses/locations', type='json', auth='public', methods=['GET'])
+    def get_warehouse_locations(self):
+        """Get all stock locations grouped by warehouse"""
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            warehouses = request.env['stock.warehouse'].sudo().search([])
+
+            result = []
+            for wh in warehouses:
+                locations = request.env['stock.location'].sudo().search([
+                    ('warehouse_id', '=', wh.id),
+                    ('usage', '=', 'internal')
+                ])
+
+                locations_data = [{
+                    'id': loc.id,
+                    'name': loc.name,
+                    'complete_name': loc.complete_name,
+                    'usage': loc.usage,
+                    'active': loc.active,
+                } for loc in locations]
+
+                result.append({
+                    'warehouse_id': wh.id,
+                    'warehouse_name': wh.name,
+                    'warehouse_code': wh.code,
+                    'stock_location_id': wh.lot_stock_id.id if wh.lot_stock_id else None,
+                    'stock_location_name': wh.lot_stock_id.complete_name if wh.lot_stock_id else None,
+                    'locations': locations_data
+                })
+
+            return {
+                'status': 'success',
+                'data': result
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get warehouse locations")
+            return {'status': 'error', 'message': str(e)}
+
+    @http.route('/api/warehouse-contact-map', type='json', auth='public', methods=['GET'])
+    def get_warehouse_contact_map(self):
+        """Get the warehouse to contact mapping configuration"""
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            result = []
+            for warehouse_id, contact_id in WAREHOUSE_CONTACT_MAP.items():
+                warehouse = request.env['stock.warehouse'].sudo().browse(warehouse_id)
+                contact = request.env['res.partner'].sudo().browse(contact_id)
+
+                result.append({
+                    'warehouse_id': warehouse_id,
+                    'warehouse_name': warehouse.name if warehouse.exists() else None,
+                    'contact_id': contact_id,
+                    'contact_name': contact.name if contact.exists() else None,
+                })
+
+            return {
+                'status': 'success',
+                'mappings': result,
+                'total_count': len(result)
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get warehouse contact map")
+            return {'status': 'error', 'message': str(e)}
+
+    # ============================================
+    # INTER-WAREHOUSE TRANSFER APIs
+    # ============================================
+
+    @http.route('/api/warehouse/transfer/create', type='json', auth='public', methods=['POST'])
+    def create_warehouse_transfer(self):
+        """
+        Create a delivery order from App warehouse, validate it, then create a receipt at destination warehouse
+        Expected payload:
+        {
+            "dest_warehouse_id": 2,
+            "lines": [
+                {"product_id": 123, "qty": 10},
+                {"product_id": 456, "qty": 5}
+            ],
+            "notes": "Optional transfer notes"
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            dest_warehouse_id = data.get('dest_warehouse_id')
+            lines = data.get('lines', [])
+            notes = data.get('notes', '')
+
+            if not dest_warehouse_id:
+                return {'status': 'error', 'message': 'Destination warehouse ID is required'}
+
+            if not lines:
+                return {'status': 'error', 'message': 'No lines provided'}
+
+            # Get contact_id from map for destination warehouse
+            contact_id = WAREHOUSE_CONTACT_MAP.get(dest_warehouse_id)
+            if not contact_id:
+                return {'status': 'error', 'message': f'Warehouse {dest_warehouse_id} not found in contact map'}
+
+            # Get contact/partner
+            partner = request.env['res.partner'].sudo().browse(contact_id)
+            if not partner.exists():
+                return {'status': 'error', 'message': f'Contact {contact_id} not found'}
+
+            # ============================================
+            # SOURCE: App Warehouse
+            # ============================================
+            app_warehouse = request.env['stock.warehouse'].sudo().search([('name', '=', 'App')], limit=1)
+            if not app_warehouse:
+                return {'status': 'error', 'message': 'App warehouse not found'}
+
+            source_location = app_warehouse.lot_stock_id
+            if not source_location:
+                return {'status': 'error', 'message': 'App warehouse stock location not found'}
+
+            # Get customer location for delivery
+            customer_location = request.env['stock.location'].sudo().search([
+                ('usage', '=', 'customer')
+            ], limit=1)
+            if not customer_location:
+                return {'status': 'error', 'message': 'Customer location not found'}
+
+            # Find outgoing picking type for App warehouse
+            outgoing_picking_type = request.env['stock.picking.type'].sudo().search([
+                ('warehouse_id', '=', app_warehouse.id),
+                ('code', '=', 'outgoing')
+            ], limit=1)
+            if not outgoing_picking_type:
+                return {'status': 'error', 'message': 'No outgoing picking type found for App warehouse'}
+
+            # ============================================
+            # DESTINATION: Target Warehouse
+            # ============================================
+            dest_warehouse = request.env['stock.warehouse'].sudo().browse(dest_warehouse_id)
+            if not dest_warehouse.exists():
+                return {'status': 'error', 'message': f'Destination warehouse {dest_warehouse_id} not found'}
+
+            dest_location = dest_warehouse.lot_stock_id
+            if not dest_location:
+                return {'status': 'error', 'message': f'Stock location not found for warehouse {dest_warehouse.name}'}
+
+            # Get supplier location for receipt
+            supplier_location = request.env['stock.location'].sudo().search([
+                ('usage', '=', 'supplier')
+            ], limit=1)
+            if not supplier_location:
+                return {'status': 'error', 'message': 'Supplier location not found'}
+
+            # Find incoming picking type for destination warehouse
+            incoming_picking_type = request.env['stock.picking.type'].sudo().search([
+                ('warehouse_id', '=', dest_warehouse.id),
+                ('code', '=', 'incoming')
+            ], limit=1)
+            if not incoming_picking_type:
+                return {'status': 'error', 'message': 'No incoming picking type found for destination warehouse'}
+
+            # ============================================
+            # Prepare delivery move lines
+            # ============================================
+            delivery_move_lines = []
+            errors = []
+
+            for line in lines:
+                product_id = line.get('product_id')
+                qty = line.get('qty', 0)
+
+                if qty <= 0:
+                    errors.append(f'Product {product_id}: Invalid quantity')
+                    continue
+
+                product = request.env['product.product'].sudo().browse(product_id)
+                if not product.exists():
+                    errors.append(f'Product {product_id}: Not found')
+                    continue
+
+                # Delivery move line (App -> Customer)
+                delivery_move_lines.append((0, 0, {
+                    'name': product.name,
+                    'product_id': product.id,
+                    'product_uom_qty': qty,
+                    'product_uom': product.uom_id.id,
+                    'location_id': source_location.id,
+                    'location_dest_id': customer_location.id,
+                }))
+
+            if not delivery_move_lines:
+                return {'status': 'error', 'message': 'No valid lines to transfer', 'errors': errors}
+
+            # ============================================
+            # Step 1: Create Delivery Order (from App warehouse)
+            # ============================================
+            delivery_vals = {
+                'picking_type_id': outgoing_picking_type.id,
+                'location_id': source_location.id,
+                'location_dest_id': customer_location.id,
+                'partner_id': contact_id,
+                'origin': f'Transfer to {dest_warehouse.name}',
+                'note': notes,
+                'move_ids': delivery_move_lines,
+            }
+
+            delivery = request.env['stock.picking'].sudo().create(delivery_vals)
+
+            # ============================================
+            # Step 2: Confirm the delivery order
+            # ============================================
+            delivery.action_confirm()
+
+            # ============================================
+            # Step 3: Set quantities done and validate delivery
+            # ============================================
+            for move in delivery.move_ids:
+                move.write({'quantity_done': move.product_uom_qty})
+
+            delivery.button_validate()
+
+            # ============================================
+            # Step 4: Create Receipt (at destination warehouse) AFTER delivery is validated
+            # ============================================
+            receipt_move_lines = []
+            for move in delivery.move_ids:
+                if move.state == 'done' and move.quantity_done > 0:
+                    receipt_move_lines.append((0, 0, {
+                        'name': move.product_id.name,
+                        'product_id': move.product_id.id,
+                        'product_uom_qty': move.quantity_done,
+                        'product_uom': move.product_uom.id,
+                        'location_id': supplier_location.id,
+                        'location_dest_id': dest_location.id,
+                    }))
+
+            if not receipt_move_lines:
+                return {
+                    'status': 'partial_success',
+                    'message': 'Delivery validated but no products to create receipt',
+                    'delivery_order': {
+                        'id': delivery.id,
+                        'name': delivery.name,
+                        'state': delivery.state,
+                    }
+                }
+
+            receipt_vals = {
+                'picking_type_id': incoming_picking_type.id,
+                'location_id': supplier_location.id,
+                'location_dest_id': dest_location.id,
+                'partner_id': contact_id,
+                'origin': f'Receipt from {delivery.name} (App Transfer)',
+                'note': notes,
+                'move_ids': receipt_move_lines,
+            }
+
+            receipt = request.env['stock.picking'].sudo().create(receipt_vals)
+
+            # ============================================
+            # Step 5: Confirm receipt (but do NOT validate - waiting for receiving)
+            # ============================================
+            receipt.action_confirm()
+
+            # ============================================
+            # Prepare response
+            # ============================================
+            delivery_moves_data = []
+            for move in delivery.move_ids:
+                delivery_moves_data.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty': move.product_uom_qty,
+                    'qty_done': move.quantity_done,
+                    'uom': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            receipt_moves_data = []
+            for move in receipt.move_ids:
+                receipt_moves_data.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty': move.product_uom_qty,
+                    'qty_done': move.quantity_done,
+                    'uom': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            return {
+                'status': 'success',
+                'delivery_order': {
+                    'id': delivery.id,
+                    'name': delivery.name,
+                    'state': delivery.state,
+                    'date_done': delivery.date_done.isoformat() if delivery.date_done else None,
+                    'origin': delivery.origin,
+                    'source_warehouse_id': app_warehouse.id,
+                    'source_warehouse_name': app_warehouse.name,
+                    'source_location': source_location.complete_name,
+                    'moves': delivery_moves_data,
+                },
+                'receipt': {
+                    'id': receipt.id,
+                    'name': receipt.name,
+                    'state': receipt.state,
+                    'origin': receipt.origin,
+                    'dest_warehouse_id': dest_warehouse_id,
+                    'dest_warehouse_name': dest_warehouse.name,
+                    'dest_location': dest_location.complete_name,
+                    'moves': receipt_moves_data,
+                },
+                'contact': {
+                    'id': contact_id,
+                    'name': partner.name,
+                },
+                'errors': errors if errors else None,
+                'message': f'Delivery {delivery.name} validated. Receipt {receipt.name} created and confirmed (pending receiving)'
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to create warehouse transfer")
+            return {'status': 'error', 'message': str(e)}
+
+
+
+    @http.route('/api/warehouse/receipt/confirm', type='json', auth='public', methods=['POST'])
+    def confirm_warehouse_receipt(self):
+        """
+        Confirm a receipt and set quantities received, then validate
+        Expected payload:
+        {
+            "receipt_id": 123,
+            "lines": [
+                {"move_id": 1, "qty_received": 10},
+                {"move_id": 2, "qty_received": 5}
+            ]
+        }
+        If lines not provided, will use ordered quantities
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            receipt_id = data.get('receipt_id')
+            lines = data.get('lines', [])
+
+            if not receipt_id:
+                return {'status': 'error', 'message': 'Receipt ID is required'}
+
+            receipt = request.env['stock.picking'].sudo().browse(receipt_id)
+            if not receipt.exists():
+                return {'status': 'error', 'message': f'Receipt {receipt_id} not found'}
+
+            if receipt.state == 'done':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is already done'}
+
+            if receipt.state == 'cancel':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is cancelled'}
+
+            # Verify this is an incoming picking (receipt)
+            if receipt.picking_type_id.code != 'incoming':
+                return {'status': 'error', 'message': f'Picking {receipt.name} is not a receipt'}
+
+            # Confirm the receipt if in draft
+            if receipt.state == 'draft':
+                receipt.action_confirm()
+
+            # Set quantities received
+            errors = []
+            received_lines = []
+
+            if lines:
+                for line in lines:
+                    move_id = line.get('move_id')
+                    qty_received = line.get('qty_received', 0)
+
+                    if qty_received < 0:
+                        errors.append(f'Move {move_id}: Invalid quantity (negative)')
+                        continue
+
+                    move = request.env['stock.move'].sudo().browse(move_id)
+                    if not move.exists():
+                        errors.append(f'Move {move_id}: Not found')
+                        continue
+
+                    if move.picking_id.id != receipt_id:
+                        errors.append(f'Move {move_id}: Does not belong to receipt {receipt.name}')
+                        continue
+
+                    # Check if qty_received exceeds ordered quantity
+                    if qty_received > move.product_uom_qty:
+                        errors.append(
+                            f'Move {move_id}: Quantity received ({qty_received}) '
+                            f'exceeds ordered quantity ({move.product_uom_qty})'
+                        )
+                        continue
+
+                    move.write({'quantity_done': qty_received})
+
+                    received_lines.append({
+                        'move_id': move_id,
+                        'product_id': move.product_id.id,
+                        'product_name': move.product_id.name,
+                        'product_barcode': move.product_id.barcode,
+                        'qty_ordered': move.product_uom_qty,
+                        'qty_received': qty_received,
+                        'uom': move.product_uom.name,
+                    })
+            else:
+                # Use ordered quantities if no lines provided
+                for move in receipt.move_ids:
+                    move.write({'quantity_done': move.product_uom_qty})
+                    received_lines.append({
+                        'move_id': move.id,
+                        'product_id': move.product_id.id,
+                        'product_name': move.product_id.name,
+                        'product_barcode': move.product_id.barcode,
+                        'qty_ordered': move.product_uom_qty,
+                        'qty_received': move.product_uom_qty,
+                        'uom': move.product_uom.name,
+                    })
+
+            # Check if any quantities were set
+            if not any(move.quantity_done > 0 for move in receipt.move_ids):
+                return {
+                    'status': 'error',
+                    'message': 'No quantities have been received',
+                    'errors': errors if errors else None
+                }
+
+            # Validate the receipt
+            receipt.button_validate()
+
+            # Get warehouse info
+            warehouse = receipt.picking_type_id.warehouse_id
+
+            return {
+                'status': 'success',
+                'receipt': {
+                    'id': receipt.id,
+                    'name': receipt.name,
+                    'state': receipt.state,
+                    'date_done': receipt.date_done.isoformat() if receipt.date_done else None,
+                    'origin': receipt.origin,
+                    'warehouse_id': warehouse.id if warehouse else None,
+                    'warehouse_name': warehouse.name if warehouse else None,
+                    'partner_id': receipt.partner_id.id if receipt.partner_id else None,
+                    'partner_name': receipt.partner_id.name if receipt.partner_id else None,
+                },
+                'received_lines': received_lines,
+                'errors': errors if errors else None,
+                'message': f'Receipt {receipt.name} has been validated successfully'
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to confirm warehouse receipt")
+            return {'status': 'error', 'message': str(e)}
+
+
+    @http.route('/api/warehouse/receipt/partial', type='json', auth='public', methods=['POST'])
+    def receive_partial_receipt(self):
+        """
+        Receive items partially (set quantities without validating)
+        Use this to receive items one by one before final validation
+        Expected payload:
+        {
+            "receipt_id": 123,
+            "lines": [
+                {"move_id": 1, "qty_received": 5}
+            ]
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            receipt_id = data.get('receipt_id')
+            lines = data.get('lines', [])
+
+            if not receipt_id:
+                return {'status': 'error', 'message': 'Receipt ID is required'}
+
+            if not lines:
+                return {'status': 'error', 'message': 'No lines provided'}
+
+            receipt = request.env['stock.picking'].sudo().browse(receipt_id)
+            if not receipt.exists():
+                return {'status': 'error', 'message': f'Receipt {receipt_id} not found'}
+
+            if receipt.state == 'done':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is already done'}
+
+            if receipt.state == 'cancel':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is cancelled'}
+
+            # Verify this is an incoming picking (receipt)
+            if receipt.picking_type_id.code != 'incoming':
+                return {'status': 'error', 'message': f'Picking {receipt.name} is not a receipt'}
+
+            # Confirm the receipt if in draft
+            if receipt.state == 'draft':
+                receipt.action_confirm()
+
+            errors = []
+            received_lines = []
+
+            for line in lines:
+                move_id = line.get('move_id')
+                qty_received = line.get('qty_received', 0)
+
+                if qty_received <= 0:
+                    errors.append(f'Move {move_id}: Invalid quantity')
+                    continue
+
+                move = request.env['stock.move'].sudo().browse(move_id)
+                if not move.exists():
+                    errors.append(f'Move {move_id}: Not found')
+                    continue
+
+                if move.picking_id.id != receipt_id:
+                    errors.append(f'Move {move_id}: Does not belong to receipt {receipt.name}')
+                    continue
+
+                # Calculate remaining quantity
+                remaining_qty = move.product_uom_qty - move.quantity_done
+                if qty_received > remaining_qty:
+                    errors.append(
+                        f'Move {move_id}: Quantity ({qty_received}) exceeds remaining ({remaining_qty})'
+                    )
+                    continue
+
+                # Add to existing quantity_done
+                new_qty_done = move.quantity_done + qty_received
+                move.write({'quantity_done': new_qty_done})
+
+                received_lines.append({
+                    'move_id': move_id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_received_now': qty_received,
+                    'total_qty_done': new_qty_done,
+                    'qty_remaining': move.product_uom_qty - new_qty_done,
+                    'uom': move.product_uom.name,
+                })
+
+            # Calculate overall progress
+            total_ordered = sum(move.product_uom_qty for move in receipt.move_ids)
+            total_done = sum(move.quantity_done for move in receipt.move_ids)
+            progress_percent = round((total_done / total_ordered * 100) if total_ordered > 0 else 0, 2)
+
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'receipt': {
+                    'id': receipt.id,
+                    'name': receipt.name,
+                    'state': receipt.state,
+                    'total_ordered': total_ordered,
+                    'total_received': total_done,
+                    'progress_percent': progress_percent,
+                    'ready_to_validate': total_done > 0,
+                },
+                'received_lines': received_lines,
+                'errors': errors if errors else None,
+                'message': f'Quantities updated. Progress: {progress_percent}%'
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to receive partial receipt")
+            return {'status': 'error', 'message': str(e)}
+
+
+    @http.route('/api/warehouse/receipt/validate', type='json', auth='public', methods=['POST'])
+    def validate_warehouse_receipt(self):
+        """
+        Validate a receipt after all items have been received
+        Expected payload:
+        {
+            "receipt_id": 123
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            receipt_id = data.get('receipt_id')
+
+            if not receipt_id:
+                return {'status': 'error', 'message': 'Receipt ID is required'}
+
+            receipt = request.env['stock.picking'].sudo().browse(receipt_id)
+            if not receipt.exists():
+                return {'status': 'error', 'message': f'Receipt {receipt_id} not found'}
+
+            if receipt.state == 'done':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is already validated'}
+
+            if receipt.state == 'cancel':
+                return {'status': 'error', 'message': f'Receipt {receipt.name} is cancelled'}
+
+            # Verify this is an incoming picking (receipt)
+            if receipt.picking_type_id.code != 'incoming':
+                return {'status': 'error', 'message': f'Picking {receipt.name} is not a receipt'}
+
+            # Check if any quantities were set
+            if not any(move.quantity_done > 0 for move in receipt.move_ids):
+                return {'status': 'error', 'message': 'No quantities have been received yet'}
+
+            # Validate the receipt
+            receipt.button_validate()
+
+            # Get warehouse info
+            warehouse = receipt.picking_type_id.warehouse_id
+
+            # Prepare moves data
+            moves_data = []
+            for move in receipt.move_ids:
+                moves_data.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_received': move.quantity_done,
+                    'uom': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            return {
+                'status': 'success',
+                'receipt': {
+                    'id': receipt.id,
+                    'name': receipt.name,
+                    'state': receipt.state,
+                    'date_done': receipt.date_done.isoformat() if receipt.date_done else None,
+                    'origin': receipt.origin,
+                    'warehouse_id': warehouse.id if warehouse else None,
+                    'warehouse_name': warehouse.name if warehouse else None,
+                    'partner_id': receipt.partner_id.id if receipt.partner_id else None,
+                    'partner_name': receipt.partner_id.name if receipt.partner_id else None,
+                    'moves': moves_data,
+                },
+                'message': f'Receipt {receipt.name} has been validated successfully'
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to validate warehouse receipt")
+            return {'status': 'error', 'message': str(e)}
+
+
+    @http.route('/api/warehouse/receipt/<int:receipt_id>', type='json', auth='public', methods=['GET'])
+    def get_receipt_details(self, receipt_id):
+        """Get details of a specific receipt"""
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            receipt = request.env['stock.picking'].sudo().browse(receipt_id)
+            if not receipt.exists():
+                return {'status': 'error', 'message': f'Receipt {receipt_id} not found'}
+
+            # Get warehouse info
+            warehouse = receipt.picking_type_id.warehouse_id
+
+            # Calculate progress
+            total_ordered = sum(move.product_uom_qty for move in receipt.move_ids)
+            total_done = sum(move.quantity_done for move in receipt.move_ids)
+            progress_percent = round((total_done / total_ordered * 100) if total_ordered > 0 else 0, 2)
+
+            moves_data = []
+            for move in receipt.move_ids:
+                moves_data.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'product_code': move.product_id.default_code,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_done': move.quantity_done,
+                    'qty_remaining': move.product_uom_qty - move.quantity_done,
+                    'uom': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            return {
+                'status': 'success',
+                'receipt': {
+                    'id': receipt.id,
+                    'name': receipt.name,
+                    'state': receipt.state,
+                    'origin': receipt.origin,
+                    'warehouse_id': warehouse.id if warehouse else None,
+                    'warehouse_name': warehouse.name if warehouse else None,
+                    'dest_location': receipt.location_dest_id.complete_name,
+                    'partner_id': receipt.partner_id.id if receipt.partner_id else None,
+                    'partner_name': receipt.partner_id.name if receipt.partner_id else None,
+                    'scheduled_date': receipt.scheduled_date.isoformat() if receipt.scheduled_date else None,
+                    'date_done': receipt.date_done.isoformat() if receipt.date_done else None,
+                    'note': receipt.note or '',
+                    'total_ordered': total_ordered,
+                    'total_received': total_done,
+                    'progress_percent': progress_percent,
+                    'ready_to_validate': total_done > 0 and receipt.state != 'done',
+                    'moves': moves_data,
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get receipt details")
+            return {'status': 'error', 'message': str(e)}        
