@@ -10,7 +10,7 @@ import random
 import uuid
 import datetime
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 _logger = logging.getLogger(__name__)
 
@@ -109,28 +109,6 @@ class ProductTemplate(models.Model):
                     record = self.env[self.fields_get()[field]['relation']].browse(value)
                     data[field] = record.read()[0] if record else None
 
-            # extract only  the name 
-            # for field in relational_fields:
-            #     value = data.get(field)
-            #     relation = self.fields_get()[field]['relation']
- 
-            #     if field == 'product_variant_ids' and isinstance(value, list):
-            #         # Extract only the IDs
-            #         data[field] = [v[0] if isinstance(v, tuple) else v for v in value]
-            #     elif field == 'attribute_line_ids' and isinstance(value, list) and value:  
-            #         records = self.env[relation].browse([v[0] if isinstance(v, tuple) else v for v in value])
-            #         data[field] = [r.display_name for r in records if hasattr(r, 'display_name')]
-            #     elif isinstance(value, list) and value:  # many2many or one2many
-            #         records = self.env[relation].browse([v[0] if isinstance(v, tuple) else v for v in value])
-            #         data[field] = [r.name for r in records if hasattr(r, 'name')]
-            #     elif isinstance(value, tuple) and value:  # many2one
-            #         record = self.env[relation].browse(value[0])
-            #         data[field] = record.name if record and hasattr(record, 'name') else None
-            #     elif isinstance(value, int):  # fallback for many2one as int
-            #         record = self.env[relation].browse(value)
-            #         data[field] = record.name if record and hasattr(record, 'name') else None
-
-
             payload = {
                 "operation": 0,
                 "type": 0,
@@ -139,32 +117,31 @@ class ProductTemplate(models.Model):
                 "data": data
             }
 
-
             print("***************$$$$$$$$$**************")
             print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
             
-            # print(payload)
-
-
             send_webhook(payload)
         return result
 
     def write(self, vals):
+        # Check if price fields are being updated
+        price_fields = ['list_price', 'standard_price']
+        price_changed = any(field in vals for field in price_fields)
+        
+        # Only proceed with webhook if price changed
+        if not price_changed:
+            return super().write(vals)
+        
         result = super().write(vals)
         if self.product_variant_ids:
-            # call the api for it
-            # call the api for it fpr syncronization
             if result: 
-
-                # call the api for it fpr syncronization
+                # call the api for it for syncronization
                 data = vals
 
                 # Convert datetime fields to strings
                 for key, value in data.items():
                     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
                         data[key] = value.isoformat() if value else None
-
-                        
 
                 payload = {
                     "operation": 1,
@@ -186,7 +163,6 @@ class ProductTemplate(models.Model):
         result = super().unlink()
         
         if result: 
-
             payload = {
                 "operation": 2,
                 "type": 0,
@@ -203,7 +179,7 @@ class Product(models.Model):
     _inherit = 'product.product'
 
     write_date = fields.Datetime(
-        'Last Updated on',  index=True, help="Date on which the record was last updated.")
+        'Last Updated on', index=True, help="Date on which the record was last updated.")
     
 
     @api.model
@@ -262,10 +238,17 @@ class Product(models.Model):
         return result
 
     def write(self, vals):
+        # Check if price fields are being updated
+        price_fields = [ 'list_price']
+        price_changed = any(field in vals for field in price_fields)
+        
+        # Only proceed with webhook if price changed
+        if not price_changed:
+            return super().write(vals)
+        
         result = super().write(vals)
         if result: 
-
-            # call the api for it fpr syncronization
+            # call the api for it for syncronization
             data = vals
 
             # Convert datetime fields to strings
@@ -284,10 +267,8 @@ class Product(models.Model):
         return result
 
     def unlink(self):
-        # ids = self.ids
         result = super().unlink()
         if result: 
-
             payload = {
                 "operation": 2,
                 "type": 1,
@@ -297,7 +278,6 @@ class Product(models.Model):
             }
             send_webhook(payload)
         return result
-
 
 # this is the LoyaltyProgram
 class LoyaltyProgram(models.Model):
@@ -1222,6 +1202,895 @@ class PosSyncController(http.Controller):
             }
         
 
+    # Add these new methods to your PosSyncController class
+
+    @http.route('/api/sales/create_order', type='json', auth='public', methods=['POST'])
+    def create_sale_order(self):
+        """
+        Create a sale order, validate delivery, and create invoice
+        Handles reward lines (negative prices) and duplicate products correctly
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            data = json.loads(request.httprequest.data)
+            orders = data.get('orders', [])
+
+            if not orders:
+                return {'status': 'error', 'message': 'No orders provided'}
+
+            created_orders = []
+            errors = []
+
+            for order in orders:
+                order_id = order.get('id')
+                order_data = order.get('data', {})
+
+                try:
+                    # Get or create customer
+                    customer_data = order_data.get('customer', {})
+                    phone = customer_data.get('phone')
+                    name = customer_data.get('name')
+                    vat = customer_data.get('vat')
+
+                    if not phone:
+                        errors.append(f"Order {order_id}: Customer phone is required")
+                        continue
+
+                    partner = request.env['res.partner'].sudo().search([
+                        ('phone', '=', phone),
+                        ('customer_rank', '>', 0)
+                    ], limit=1)
+
+                    if partner:
+                        updates = {}
+                        if name and partner.name != name:
+                            updates['name'] = name
+                        if vat and partner.vat != vat:
+                            updates['vat'] = vat
+                        if updates:
+                            partner.write(updates)
+                    else:
+                        partner = request.env['res.partner'].sudo().create({
+                            'name': name or phone,
+                            'phone': phone,
+                            'vat': vat,
+                            'customer_rank': 1,
+                        })
+
+                    # Get App warehouse
+                    app_warehouse = request.env['stock.warehouse'].sudo().search([
+                        ('name', '=', 'App')
+                    ], limit=1)
+
+                    if not app_warehouse:
+                        errors.append(f"Order {order_id}: App warehouse not found")
+                        continue
+
+                    # Prepare order lines - KEEP ALL LINES SEPARATE (don't merge)
+                    order_lines = []
+                    delivery_lines_info = []  # Track what should be delivered
+                    
+                    for idx, line in enumerate(order_data.get('order_lines', [])):
+                        product_id = line.get('product_id')
+                        qty = line.get('qty', 0)
+                        price_unit = line.get('price_unit', 0)
+                        discount = line.get('discount', 0)
+                        is_reward = line.get('is_reward_line', False)
+
+                        product = request.env['product.product'].sudo().browse(product_id)
+                        if not product.exists():
+                            errors.append(f"Order {order_id}: Product {product_id} not found")
+                            continue
+
+                        # Add to sale order
+                        order_lines.append((0, 0, {
+                            'product_id': product_id,
+                            'product_uom_qty': abs(qty),  # Always positive for sale line
+                            'price_unit': price_unit,  # Can be negative for rewards
+                            'discount': discount,
+                            'tax_id': [(6, 0, product.taxes_id.ids)] if product.taxes_id else False,
+                        }))
+                        
+                        # Track for delivery - only if positive quantity and not a pure discount line
+                        if qty > 0:
+                            delivery_lines_info.append({
+                                'product_id': product_id,
+                                'qty': qty,
+                                'is_reward': is_reward,
+                                'line_index': idx
+                            })
+
+                    if not order_lines:
+                        errors.append(f"Order {order_id}: No valid order lines")
+                        continue
+
+                    # Create sale order
+                    sale_order = request.env['sale.order'].sudo().create({
+                        'partner_id': partner.id,
+                        'warehouse_id': app_warehouse.id,
+                        'order_line': order_lines,
+                        'note': order_data.get('notes', ''),
+                        'client_order_ref': order_data.get('name', ''),
+                    })
+
+                    _logger.info(f"Created sale order {sale_order.name} with {len(order_lines)} lines")
+                    _logger.info(f"Expected delivery items: {len(delivery_lines_info)}")
+
+                    # Disable auto-batch
+                    app_picking_types = request.env['stock.picking.type'].sudo().search([
+                        ('warehouse_id', '=', app_warehouse.id)
+                    ])
+                    for picking_type in app_picking_types:
+                        if picking_type.auto_batch:
+                            picking_type.sudo().write({'auto_batch': False})
+
+                    # Confirm sale order
+                    sale_order.with_context(
+                        skip_auto_batch=True,
+                        bypass_auto_batch=True
+                    ).action_confirm()
+
+                    # ============================================================
+                    # CONSOLIDATE AND PROCESS PICKINGS
+                    # ============================================================
+                    _logger.info(f"Total pickings after confirm: {len(sale_order.picking_ids)}")
+                    
+                    # Get all active pickings
+                    active_pickings = sale_order.picking_ids.filtered(
+                        lambda p: p.state not in ['done', 'cancel']
+                    )
+                    
+                    _logger.info(f"Active pickings: {len(active_pickings)}")
+                    
+                    # Consolidate multiple pickings into one
+                    if len(active_pickings) > 1:
+                        _logger.info(f"Consolidating {len(active_pickings)} pickings...")
+                        
+                        main_picking = active_pickings[0]
+                        other_pickings = active_pickings[1:]
+                        
+                        # Remove all from batch
+                        for picking in active_pickings:
+                            if hasattr(picking, 'batch_id') and picking.batch_id:
+                                picking.sudo().write({'batch_id': False})
+                        
+                        # Move all moves to main picking
+                        for picking in other_pickings:
+                            _logger.info(f"Moving {len(picking.move_ids)} moves from {picking.name} to {main_picking.name}")
+                            for move in picking.move_ids:
+                                move.sudo().write({'picking_id': main_picking.id})
+                            # Cancel empty picking
+                            picking.sudo().write({'state': 'cancel'})
+                        
+                        delivery_picking = main_picking
+                    
+                    elif len(active_pickings) == 1:
+                        delivery_picking = active_pickings[0]
+                        if hasattr(delivery_picking, 'batch_id') and delivery_picking.batch_id:
+                            delivery_picking.sudo().write({'batch_id': False})
+                    else:
+                        delivery_picking = None
+                        _logger.warning("No active pickings found!")
+
+                    delivery_status = 'no_delivery'
+                    
+                    if delivery_picking:
+                        _logger.info(f"Processing picking {delivery_picking.name} with {len(delivery_picking.move_ids)} moves")
+                        
+                        # Process EVERY move
+                        for move in delivery_picking.move_ids:
+                            _logger.info(f"Move {move.id}: Product={move.product_id.name}, Qty={move.product_uom_qty}, State={move.state}")
+                            
+                            if move.state not in ['done', 'cancel']:
+                                
+                                # Force to assigned
+                                move.sudo().write({
+                                    'state': 'assigned',
+                                    'procure_method': 'make_to_stock',
+                                })
+                                
+                                # Clear existing move lines
+                                if move.move_line_ids:
+                                    _logger.info(f"Clearing {len(move.move_line_ids)} existing move lines for move {move.id}")
+                                    move.move_line_ids.sudo().unlink()
+                                
+                                # Create move line with qty_done
+                                move_line_vals = {
+                                    'move_id': move.id,
+                                    'product_id': move.product_id.id,
+                                    'product_uom_id': move.product_uom.id,
+                                    'location_id': move.location_id.id,
+                                    'location_dest_id': move.location_dest_id.id,
+                                    'qty_done': move.product_uom_qty,
+                                    'picking_id': delivery_picking.id,
+                                    'company_id': move.company_id.id,
+                                }
+                                
+                                try:
+                                    move_line = request.env['stock.move.line'].sudo().create(move_line_vals)
+                                    _logger.info(f"✓ Created move line {move_line.id}: qty_done={move_line.qty_done}")
+                                except Exception as ml_error:
+                                    _logger.error(f"Failed to create move line for move {move.id}: {str(ml_error)}")
+                                    continue
+                                
+                                # Update move
+                                move.sudo().write({
+                                    'quantity_done': move.product_uom_qty,
+                                    'state': 'assigned',
+                                })
+                                
+                                # Force to done
+                                try:
+                                    move.sudo()._action_done()
+                                    _logger.info(f"✓ Move {move.id} done via _action_done")
+                                except Exception as done_error:
+                                    _logger.warning(f"_action_done failed for move {move.id}: {str(done_error)}")
+                                    move.sudo().write({
+                                        'state': 'done',
+                                        'date': fields.Datetime.now(),
+                                    })
+                                    if move_line:
+                                        move_line.sudo().write({'state': 'done'})
+                                    _logger.info(f"✓ Move {move.id} forced to done")
+                        
+                        # Final verification
+                        all_moves = delivery_picking.move_ids
+                        done_moves = all_moves.filtered(lambda m: m.state == 'done')
+                        total_move_lines = sum(len(m.move_line_ids) for m in all_moves)
+                        
+                        _logger.info(f"Final state: {len(done_moves)}/{len(all_moves)} moves done, {total_move_lines} move lines")
+                        
+                        # Force picking to done
+                        delivery_picking.sudo().write({
+                            'state': 'done',
+                            'date_done': fields.Datetime.now(),
+                        })
+                        
+                        delivery_status = 'done'
+                        _logger.info(f"✓✓✓ Picking {delivery_picking.name} DONE ✓✓✓")
+
+                    # ============================================================
+                    # CREATE INVOICE
+                    # ============================================================
+                    invoice = None
+                    try:
+                        invoice = sale_order._create_invoices()
+                        
+                        if invoice:
+                            invoice.action_post()
+                            _logger.info(f"✓ Invoice {invoice.name} posted")
+                            
+                            # Register payment
+                            try:
+                                bank_journal = request.env['account.journal'].sudo().search([
+                                    ('type', '=', 'bank')
+                                ], limit=1)
+                                
+                                if bank_journal:
+                                    payment = request.env['account.payment'].sudo().create({
+                                        'payment_type': 'inbound',
+                                        'partner_type': 'customer',
+                                        'partner_id': partner.id,
+                                        'amount': invoice.amount_total,
+                                        'journal_id': bank_journal.id,
+                                        'date': fields.Date.today(),
+                                        'ref': f"Payment for {invoice.name}",
+                                    })
+                                    payment.action_post()
+                                    
+                                    domain = [
+                                        ('account_id', '=', invoice.line_ids.filtered(
+                                            lambda l: l.account_id.account_type == 'asset_receivable'
+                                        )[0].account_id.id),
+                                        ('reconciled', '=', False),
+                                        '|',
+                                        ('move_id', '=', invoice.id),
+                                        ('move_id', '=', payment.move_id.id)
+                                    ]
+                                    
+                                    lines_to_reconcile = request.env['account.move.line'].sudo().search(domain)
+                                    if lines_to_reconcile:
+                                        lines_to_reconcile.reconcile()
+                                    
+                                    _logger.info(f"✓ Payment reconciled")
+                            
+                            except Exception as payment_error:
+                                _logger.warning(f"Payment failed: {str(payment_error)}")
+                    
+                    except Exception as invoice_error:
+                        _logger.error(f"Invoice failed: {str(invoice_error)}")
+
+                    # ============================================================
+                    # BUILD RESPONSE
+                    # ============================================================
+                    delivery_lines = []
+                    if delivery_picking:
+                        for move in delivery_picking.move_ids:
+                            if move.state != 'cancel':  # Don't include cancelled moves
+                                delivery_lines.append({
+                                    'move_id': move.id,
+                                    'product_id': move.product_id.id,
+                                    'product_name': move.product_id.name,
+                                    'quantity_ordered': move.product_uom_qty,
+                                    'quantity_done': move.quantity_done,
+                                    'state': move.state,
+                                    'move_lines_count': len(move.move_line_ids),
+                                    'sale_line_id': move.sale_line_id.id if move.sale_line_id else None,
+                                })
+                    
+                    created_orders.append({
+                        'order_id': order_id,
+                        'sale_order_id': sale_order.id,
+                        'sale_order_name': sale_order.name,
+                        'state': sale_order.state,
+                        'invoice_id': invoice.id if invoice else None,
+                        'invoice_name': invoice.name if invoice else None,
+                        'invoice_state': invoice.state if invoice else None,
+                        'invoice_amount': invoice.amount_total if invoice else 0,
+                        'payment_state': invoice.payment_state if invoice else 'not_paid',
+                        'delivery_picking_id': delivery_picking.id if delivery_picking else None,
+                        'delivery_picking_name': delivery_picking.name if delivery_picking else None,
+                        'delivery_state': delivery_picking.state if delivery_picking else None,
+                        'delivery_status': delivery_status,
+                        'delivery_lines': delivery_lines,
+                        'delivery_lines_count': len(delivery_lines),
+                        'total_pickings': len(sale_order.picking_ids),
+                        'active_pickings': len(sale_order.picking_ids.filtered(lambda p: p.state != 'cancel')),
+                        'amount_total': sale_order.amount_total,
+                    })
+                    
+                    _logger.info(f"✓✓✓ Order {order_id} COMPLETED - {len(delivery_lines)} delivery lines ✓✓✓")
+
+                except Exception as e:
+                    _logger.exception(f"Failed to create sale order {order_id}")
+                    errors.append(f"Order {order_id}: {str(e)}")
+
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'created_orders': created_orders,
+                'errors': errors if errors else None,
+                'summary': {
+                    'total_orders': len(orders),
+                    'successful_orders': len(created_orders),
+                    'failed_orders': len(errors)
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to create sale orders")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+    @http.route('/api/sales/return_order', type='json', auth='public', methods=['POST'])
+    def return_sale_order(self):
+        """
+        Return/Cancel a sale order and create credit note
+        Expected payload:
+        {
+            "returns": [
+                {
+                    "sale_order_name": "SO001",
+                    "return_lines": [
+                        {
+                            "product_id": 99,
+                            "qty": 5,
+                            "price_unit": 5.0
+                        }
+                    ],
+                    "reason": "Customer return"
+                }
+            ]
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired', 'status': 401}
+
+        try:
+            data = json.loads(request.httprequest.data)
+            returns = data.get('returns', [])
+
+            if not returns:
+                return {'status': 'error', 'message': 'No returns provided'}
+
+            processed_returns = []
+            errors = []
+
+            for return_data in returns:
+                sale_order_name = return_data.get('sale_order_name')
+                return_lines = return_data.get('return_lines', [])
+                reason = return_data.get('reason', 'Customer return')
+
+                try:
+                    # Find the sale order
+                    sale_order = request.env['sale.order'].sudo().search([
+                        ('name', '=', sale_order_name)
+                    ], limit=1)
+
+                    if not sale_order:
+                        errors.append(f"Sale order {sale_order_name} not found")
+                        continue
+
+                    if sale_order.state == 'cancel':
+                        errors.append(f"Sale order {sale_order_name} is already cancelled")
+                        continue
+
+                    # Validate return_lines before processing
+                    if not return_lines:
+                        errors.append(f"Sale order {sale_order_name}: No return lines provided")
+                        continue
+
+                    valid_lines = [line for line in return_lines if line.get('qty', 0) > 0]
+                    if not valid_lines:
+                        errors.append(f"Sale order {sale_order_name}: No valid return lines (qty must be > 0)")
+                        continue
+
+                    _logger.info(f"Processing return for {sale_order_name} with {len(valid_lines)} valid lines")
+
+                    # ============================================================
+                    # STEP 1: Create return picking - USE ONLY API-SPECIFIED LINES
+                    # ============================================================
+                    return_picking = None
+                    if sale_order.picking_ids:
+                        # Find done pickings
+                        done_pickings = sale_order.picking_ids.filtered(lambda p: p.state == 'done')
+                        
+                        if done_pickings:
+                            picking = done_pickings[0]
+                            
+                            _logger.info(f"Creating return from picking {picking.name}")
+                            
+                            # Create return picking wizard
+                            return_wizard = request.env['stock.return.picking'].sudo().with_context(
+                                active_id=picking.id,
+                                active_model='stock.picking'
+                            ).create({
+                                'picking_id': picking.id,
+                            })
+                            
+                            # CRITICAL: Clear all auto-generated lines
+                            if return_wizard.product_return_moves:
+                                return_wizard.product_return_moves.sudo().unlink()
+                                _logger.info("Cleared auto-generated return lines")
+                            
+                            # Add ONLY the lines specified in the API
+                            lines_added = 0
+                            for ret_line in valid_lines:
+                                product_id = ret_line.get('product_id')
+                                qty = ret_line.get('qty', 0)
+                                
+                                # Find the original move for this product
+                                original_moves = picking.move_ids.filtered(
+                                    lambda m: m.product_id.id == product_id and m.state == 'done'
+                                )
+                                
+                                if not original_moves:
+                                    _logger.warning(f"No done move found for product {product_id} in picking {picking.name}")
+                                    continue
+                                
+                                # Take the first matching move
+                                move = original_moves[0]
+                                
+                                # Validate quantity
+                                if qty > move.quantity_done:
+                                    _logger.warning(f"Return qty {qty} exceeds original qty {move.quantity_done} for product {product_id}")
+                                    qty = move.quantity_done
+                                
+                                # Create return line
+                                return_line = request.env['stock.return.picking.line'].sudo().create({
+                                    'product_id': product_id,
+                                    'quantity': qty,
+                                    'move_id': move.id,
+                                    'wizard_id': return_wizard.id,
+                                    'uom_id': move.product_uom.id,
+                                    'to_refund': True,
+                                })
+                                
+                                lines_added += 1
+                                _logger.info(f"✓ Added return line: Product {product_id}, Qty {qty}, Move {move.id}")
+                            
+                            if lines_added == 0:
+                                _logger.error(f"No return lines were added for picking {picking.name}")
+                                errors.append(f"Sale order {sale_order_name}: No valid products found in original picking")
+                                continue
+                            
+                            _logger.info(f"Total return lines added: {lines_added}")
+                            
+                            # Verify lines exist before creating returns
+                            if not return_wizard.product_return_moves:
+                                errors.append(f"Sale order {sale_order_name}: Failed to create return lines")
+                                continue
+                            
+                            # Create the return picking
+                            try:
+                                result = return_wizard.create_returns()
+                            except Exception as e:
+                                _logger.exception(f"Failed to create returns for {sale_order_name}")
+                                errors.append(f"Sale order {sale_order_name}: {str(e)}")
+                                continue
+                            
+                            if result and result.get('res_id'):
+                                return_picking = request.env['stock.picking'].sudo().browse(result['res_id'])
+                                
+                                _logger.info(f"✓ Created return picking {return_picking.name} with {len(return_picking.move_ids)} moves")
+                                
+                                # Validate the return picking
+                                for move in return_picking.move_ids:
+                                    # Clear existing move lines
+                                    if move.move_line_ids:
+                                        move.move_line_ids.sudo().unlink()
+                                    
+                                    # Create move line with qty_done
+                                    request.env['stock.move.line'].sudo().create({
+                                        'move_id': move.id,
+                                        'product_id': move.product_id.id,
+                                        'product_uom_id': move.product_uom.id,
+                                        'location_id': move.location_id.id,
+                                        'location_dest_id': move.location_dest_id.id,
+                                        'qty_done': move.product_uom_qty,
+                                        'picking_id': return_picking.id,
+                                        'company_id': move.company_id.id,
+                                    })
+                                    
+                                    move.sudo().write({'quantity_done': move.product_uom_qty})
+                                
+                                # Validate the return
+                                try:
+                                    return_picking.sudo().action_done()
+                                    _logger.info(f"✓ Return picking {return_picking.name} validated")
+                                except Exception as e:
+                                    # Fallback: use button_validate
+                                    try:
+                                        return_result = return_picking.button_validate()
+                                        
+                                        if isinstance(return_result, dict):
+                                            if return_result.get('res_model') == 'stock.backorder.confirmation':
+                                                wizard_id = return_result.get('res_id')
+                                                if wizard_id:
+                                                    wizard = request.env['stock.backorder.confirmation'].sudo().browse(wizard_id)
+                                                    wizard.process_cancel_backorder()
+                                        
+                                        _logger.info(f"✓ Return picking {return_picking.name} validated via button_validate")
+                                    except Exception as e2:
+                                        _logger.error(f"Failed to validate return picking: {str(e2)}")
+                                        errors.append(f"Sale order {sale_order_name}: Failed to validate return picking - {str(e2)}")
+                                        continue
+                            else:
+                                errors.append(f"Sale order {sale_order_name}: Failed to create return picking")
+                                continue
+                        else:
+                            _logger.warning(f"No done pickings found for {sale_order_name}")
+
+                    # ============================================================
+                    # STEP 2: Create credit note - USE ONLY API-SPECIFIED LINES
+                    # ============================================================
+                    credit_note = None
+                    invoices = sale_order.invoice_ids.filtered(
+                        lambda inv: inv.state == 'posted' and inv.move_type == 'out_invoice'
+                    )
+                    
+                    if invoices:
+                        invoice = invoices[0]
+                        
+                        _logger.info(f"Creating credit note from invoice {invoice.name}")
+                        
+                        # Create a manual credit note with only specified lines
+                        credit_note = request.env['account.move'].sudo().create({
+                            'move_type': 'out_refund',
+                            'partner_id': invoice.partner_id.id,
+                            'invoice_origin': invoice.name,
+                            'invoice_date': fields.Date.today(),
+                            'journal_id': invoice.journal_id.id,
+                            'ref': reason,
+                            'currency_id': invoice.currency_id.id,
+                            'fiscal_position_id': invoice.fiscal_position_id.id if invoice.fiscal_position_id else False,
+                        })
+                        
+                        # Add ONLY the lines specified in API
+                        credit_lines_added = 0
+                        for ret_line in valid_lines:
+                            product_id = ret_line.get('product_id')
+                            qty = ret_line.get('qty', 0)
+                            price_unit = ret_line.get('price_unit', 0)
+                            
+                            # Find the original invoice line
+                            original_lines = invoice.invoice_line_ids.filtered(
+                                lambda l: l.product_id.id == product_id
+                            )
+                            
+                            if not original_lines:
+                                _logger.warning(f"No invoice line found for product {product_id}")
+                                continue
+                            
+                            line = original_lines[0]
+                            
+                            # Create credit note line
+                            request.env['account.move.line'].sudo().with_context(
+                                check_move_validity=False
+                            ).create({
+                                'move_id': credit_note.id,
+                                'product_id': product_id,
+                                'name': line.name,
+                                'quantity': qty,
+                                'price_unit': price_unit,
+                                'account_id': line.account_id.id,
+                                'tax_ids': [(6, 0, line.tax_ids.ids)],
+                                'product_uom_id': line.product_uom_id.id,
+                            })
+                            
+                            credit_lines_added += 1
+                            _logger.info(f"✓ Added credit line: Product {product_id}, Qty {qty}, Price {price_unit}")
+                        
+                        if credit_lines_added > 0:
+                            # Force recompute totals - works in all Odoo versions
+                            try:
+                                # Try method 1: Direct recompute (Odoo 15+)
+                                credit_note._compute_amount()
+                            except:
+                                try:
+                                    # Try method 2: Recompute tax lines (Odoo 13-14)
+                                    credit_note._recompute_payment_terms_lines()
+                                except:
+                                    # Method 3: Force compute by invalidating cache
+                                    credit_note.invalidate_cache(['amount_total', 'amount_tax', 'amount_untaxed'])
+                            
+                            # Post the credit note - this will auto-compute if needed
+                            credit_note.action_post()
+                            
+                            _logger.info(f"✓ Credit note {credit_note.name} posted, amount: {credit_note.amount_total}")
+                        else:
+                            # Delete empty credit note
+                            credit_note.sudo().unlink()
+                            credit_note = None
+                            _logger.warning(f"No credit note lines created, credit note deleted")
+                    else:
+                        _logger.warning(f"No posted invoices found for {sale_order_name}")
+
+                    # ============================================================
+                    # STEP 3: Cancel the sale order
+                    # ============================================================
+                    sale_order.action_cancel()
+                    _logger.info(f"✓ Sale order {sale_order_name} cancelled")
+
+                    processed_returns.append({
+                        'sale_order_name': sale_order_name,
+                        'sale_order_id': sale_order.id,
+                        'sale_order_state': sale_order.state,
+                        'return_picking_id': return_picking.id if return_picking else None,
+                        'return_picking_name': return_picking.name if return_picking else None,
+                        'return_picking_state': return_picking.state if return_picking else None,
+                        'credit_note_id': credit_note.id if credit_note else None,
+                        'credit_note_name': credit_note.name if credit_note else None,
+                        'credit_note_state': credit_note.state if credit_note else None,
+                        'credit_amount': credit_note.amount_total if credit_note else 0,
+                    })
+                    
+                    _logger.info(f"✓✓✓ Return processed successfully for {sale_order_name}")
+
+                except Exception as e:
+                    _logger.exception(f"Failed to process return for {sale_order_name}")
+                    errors.append(f"Return {sale_order_name}: {str(e)}")
+
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'processed_returns': processed_returns,
+                'errors': errors if errors else None,
+                'summary': {
+                    'total_returns': len(returns),
+                    'successful_returns': len(processed_returns),
+                    'failed_returns': len(errors)
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to process sale order returns")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+            
+    @http.route('/api/loyalty/programs', type='json', auth='public', methods=['GET'])
+    def get_loyalty_programs(self, **kwargs):
+        """
+        Get all loyalty programs with exact query from model
+        
+        Request:
+        GET /api/loyalty/programs
+        Headers: Authorization: your-token
+        
+        Response:
+        {
+            "status": "success",
+            "data": [...],
+            "count": 10
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired', 'status': 401}
+
+        try:
+            
+            # Execute exact query
+            query = """
+                SELECT
+                    lp.id AS program_id,
+                    COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
+                    lr.id AS rule_id,
+                    lr.mode AS rule_mode,
+                    lr.active AS rule_active,
+                    lr.code AS discount_code,
+                    lr.minimum_qty AS rule_min_qty,
+                    lr.minimum_amount AS rule_min_amount,
+                    
+                    -- Main Product (from loyalty_program.product_id)
+                    pp_main.id AS main_product_id,
+                    COALESCE(pt_main.name->>'ar_001', pt_main.name->>'en_US', '') AS main_product_name,
+                    pp_main.barcode AS main_product_barcode,
+                    pt_main.list_price AS main_product_list_price,
+
+                    -- Eligible Product (from loyalty_rule_product_product_rel)
+                    pp_eligible.id AS eligible_product_id,
+                    COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
+                    pp_eligible.barcode AS eligible_product_barcode,
+                    pt_eligible.list_price AS eligible_product_list_price,
+
+                    -- Reward Product (from loyalty_reward.reward_product_id)
+                    pp_reward.id AS reward_product_id,
+                    COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
+                    pp_reward.barcode AS reward_product_barcode,
+                    pt_reward.list_price AS reward_product_list_price,
+
+                    lrp.product_product_id AS eligible_relation_id,
+                    lr.total_price AS rule_total_price,
+                    lr.after_dis AS rule_after_discount,
+                    lr.discount AS rule_discount
+                FROM loyalty_program lp
+                LEFT JOIN loyalty_rule lr
+                    ON lr.program_id = lp.id
+                LEFT JOIN product_product pp_main
+                    ON pp_main.id = lp.product_id
+                LEFT JOIN product_template pt_main
+                    ON pt_main.id = pp_main.product_tmpl_id
+                    
+                -- Eligible products
+                LEFT JOIN loyalty_rule_product_product_rel lrp
+                    ON lrp.loyalty_rule_id = lr.id
+                LEFT JOIN product_product pp_eligible
+                    ON pp_eligible.id = lrp.product_product_id
+                LEFT JOIN product_template pt_eligible
+                    ON pt_eligible.id = pp_eligible.product_tmpl_id
+
+                -- Reward products
+                LEFT JOIN loyalty_reward lrw
+                    ON lrw.program_id = lp.id
+                LEFT JOIN product_product pp_reward
+                    ON pp_reward.id = lrw.reward_product_id
+                LEFT JOIN product_template pt_reward
+                    ON pt_reward.id = pp_reward.product_tmpl_id
+
+                ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
+            """
+            
+            request.env.cr.execute(query)
+            raw_results = request.env.cr.dictfetchall()
+            
+            # Convert datetime fields to ISO format
+            converted_results = []
+            for item in raw_results:
+                converted_item = {}
+                for key, value in item.items():
+                    if isinstance(value, (datetime, date)):
+                        converted_item[key] = value.isoformat() if value else None
+                    elif hasattr(value, 'isoformat'):
+                        converted_item[key] = value.isoformat() if value else None
+                    else:
+                        converted_item[key] = value
+                converted_results.append(converted_item)
+            
+            return {
+                'status': 'success',
+                'data': converted_results,
+                'count': len(converted_results)
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to fetch loyalty programs")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+        
+
+
+    @http.route('/api/products/prices', type='json', auth='public', methods=['GET'])
+    def get_product_prices(self, **kwargs):
+        """
+        Get all products with template_id, prices, and last update time
+        
+        Request:
+        GET /api/products/prices
+        Headers: Authorization: your-token
+        
+        Response:
+        {
+            "status": "success",
+            "data": [
+                {
+                    "product_template_id": 1,
+                    "product_id": 10,
+                    "name": "Product Name",
+                    "list_price": 100.0,
+                    "standard_price": 80.0,
+                    "write_date": "2024-12-22T10:30:00"
+                }
+            ],
+            "count": 100
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired', 'status': 401}
+
+        try:
+            # Query to get product template, prices, and last update
+            query = """
+                SELECT
+                    pt.id AS id,
+                    pt.list_price,
+                    pt.write_date AS last_update_time,
+                    pp.barcode,
+                    pt.active
+                FROM product_template pt
+                LEFT JOIN product_product pp
+                    ON pp.product_tmpl_id = pt.id
+                WHERE pt.active = true
+                ORDER BY pt.write_date DESC;
+            """
+            
+            request.env.cr.execute(query)
+            raw_results = request.env.cr.dictfetchall()
+            
+            # Convert datetime fields to ISO format
+            converted_results = []
+            for item in raw_results:
+                converted_item = {}
+                for key, value in item.items():
+                    if isinstance(value, (datetime, date)):
+                        converted_item[key] = value.isoformat() if value else None
+                    elif hasattr(value, 'isoformat'):
+                        converted_item[key] = value.isoformat() if value else None
+                    else:
+                        converted_item[key] = value
+                converted_results.append(converted_item)
+            
+            return {
+                'status': 'success',
+                'data': converted_results,
+                'count': len(converted_results)
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to fetch product prices")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }    
+        
+
     # this is the api for the token so that it can be called to get token so can access the end point
     @http.route('/api/auth/token', type='json', auth='public', methods=['POST'])
     def get_token(self):
@@ -1276,7 +2145,6 @@ class PurchaseOrder(models.Model):
                 'product_code': line.product_id.default_code,
                 'quantity': line.product_qty,
                 'qty_received': line.qty_received,
-                'sales_price': line.sales_price,
                 'qty_to_receive': line.product_qty - line.qty_received,
                 'price_unit': line.price_unit,
                 'price_subtotal': line.price_subtotal,
@@ -1332,7 +2200,7 @@ class PurchaseOrder(models.Model):
         print("***************$$$$$ PURCHASE ORDER WEBHOOK $$$$$**************")
         print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
         
-        send_webhook(payload)
+        # send_webhook(payload)
 
 
 class PurchaseOrderReceivingController(http.Controller):
@@ -1578,19 +2446,19 @@ class StockPicking(models.Model):
         
         return result
 
-    def write(self, vals):
-        """Override write to send webhook when receipt is updated"""
-        result = super().write(vals)
+    # def write(self, vals):
+    #     """Override write to send webhook when receipt is updated"""
+    #     result = super().write(vals)
         
-        for picking in self:
-            if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
-                warehouse = picking.picking_type_id.warehouse_id
-                if warehouse and warehouse.name == 'App':
-                    if 'state' in vals or 'move_ids' in vals or 'move_line_ids' in vals:
-                        print("***************$$$$ STOCK RECEIPT UPDATED FOR APP $$$$**************")
-                        self._send_receipt_webhook(picking, operation=1)
+    #     for picking in self:
+    #         if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
+    #             warehouse = picking.picking_type_id.warehouse_id
+    #             if warehouse and warehouse.name == 'App':
+    #                 if 'state' in vals or 'move_ids' in vals or 'move_line_ids' in vals:
+    #                     print("***************$$$$ STOCK RECEIPT UPDATED FOR APP $$$$**************")
+    #                     self._send_receipt_webhook(picking, operation=1)
         
-        return result
+    #     return result
 
     # def button_validate(self):
     #     """Override validate to send webhook when receipt is validated"""
@@ -1663,7 +2531,7 @@ class StockPicking(models.Model):
         print("***************$$$$$ STOCK RECEIPT WEBHOOK $$$$$**************")
         print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
 
-        send_webhook(payload)
+        # send_webhook(payload)
 
 
 
@@ -1703,10 +2571,19 @@ class StockReceivingController(http.Controller):
 
             received_lines = []
             errors = []
+            
+            # Get list of move_ids that we're receiving
+            receiving_move_ids = [line.get('move_id') for line in lines_to_receive]
+
+            # IMPORTANT: Set quantity_done to 0 for all moves NOT in the request
+            # This prevents Odoo from auto-filling unreceived items
+            for move in picking.move_ids:
+                if move.id not in receiving_move_ids and move.state not in ['done', 'cancel']:
+                    move.write({'quantity_done': 0})
 
             for line_data in lines_to_receive:
                 move_id = line_data.get('move_id')
-                qty_to_receive = line_data.get('qty_received', 0)
+                qty_to_receive = float(line_data.get('qty_received', 0))
 
                 if qty_to_receive <= 0:
                     errors.append(f'Move {move_id}: Invalid quantity')
@@ -1726,22 +2603,86 @@ class StockReceivingController(http.Controller):
                     errors.append(f'Move {move_id}: Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})')
                     continue
 
-                move.write({'quantity_done': move.quantity_done + qty_to_receive})
+                # Set the exact quantity done (not add, but set)
+                move.write({'quantity_done': qty_to_receive})
 
                 received_lines.append({
                     'move_id': move_id,
                     'product_id': move.product_id.id,
                     'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode if move.product_id.barcode else '',
                     'qty_received': qty_to_receive,
-                    'total_qty_done': move.quantity_done,
-                    'qty_remaining': move.product_uom_qty - move.quantity_done,
+                    'total_qty_done': qty_to_receive,
+                    'qty_remaining': move.product_uom_qty - qty_to_receive,
                 })
+
+            # ALWAYS validate the picking after receiving any lines - WITHOUT BACKORDER
+            validated = False
+            validation_error = None
+            
+            if received_lines:  # Only validate if we successfully received at least one line
+                try:
+                    # First, cancel moves that have quantity_done = 0
+                    moves_to_cancel = picking.move_ids.filtered(
+                        lambda m: m.quantity_done == 0 and m.state not in ['done', 'cancel']
+                    )
+                    if moves_to_cancel:
+                        moves_to_cancel._action_cancel()
+                    
+                    # Now validate the picking
+                    result = picking.button_validate()
+                    
+                    # Handle wizard response (for backorders, etc.)
+                    if isinstance(result, dict):
+                        # Check if it's a backorder confirmation wizard
+                        if result.get('res_model') == 'stock.backorder.confirmation':
+                            wizard_id = result.get('res_id')
+                            if wizard_id:
+                                wizard = request.env['stock.backorder.confirmation'].sudo().browse(wizard_id)
+                                # Process cancel - NO BACKORDER (validates without creating backorder)
+                                wizard.process_cancel_backorder()
+                        
+                        # Check if it's an immediate transfer wizard
+                        elif result.get('res_model') == 'stock.immediate.transfer':
+                            wizard_id = result.get('res_id')
+                            if wizard_id:
+                                wizard = request.env['stock.immediate.transfer'].sudo().browse(wizard_id)
+                                wizard.process()
+                    
+                    # Double-check the state and force validation if needed
+                    if picking.state != 'done':
+                        # Force the picking to done state
+                        picking.write({'state': 'done', 'date_done': fields.Datetime.now()})
+                        # Mark all moves as done
+                        for move in picking.move_ids.filtered(lambda m: m.quantity_done > 0):
+                            if move.state != 'done':
+                                move.write({'state': 'done'})
+                    
+                    validated = True
+                    _logger.info(f"✓ Successfully validated picking {picking_name} without backorder")
+                    
+                except Exception as e:
+                    validation_error = str(e)
+                    errors.append(f'Validation failed: {validation_error}')
+                    _logger.exception(f"Failed to validate picking {picking_name}")
 
             return {
                 'status': 'success' if not errors else 'partial_success',
-                'picking': {'id': picking.id, 'name': picking.name, 'state': picking.state},
+                'picking': {
+                    'id': picking.id,
+                    'name': picking.name,
+                    'state': picking.state,
+                    'date_done': picking.date_done.isoformat() if picking.date_done else None,
+                    'validated': validated
+                },
                 'received_lines': received_lines,
-                'errors': errors if errors else None
+                'errors': errors if errors else None,
+                'summary': {
+                    'total_lines_processed': len(lines_to_receive),
+                    'successful_lines': len(received_lines),
+                    'failed_lines': len(errors),
+                    'picking_validated': validated
+                }
             }
 
         except Exception as e:
@@ -1965,9 +2906,8 @@ class StockReceivingController(http.Controller):
 # Map warehouse_id to contact_id (partner_id)
 # Format: {warehouse_id: contact_id}
 WAREHOUSE_CONTACT_MAP = {
-    2: 10,   # Warehouse ID 2 -> Contact/Partner ID 10
-    3: 15,   # Warehouse ID 3 -> Contact/Partner ID 15
-    4: 20,   # Warehouse ID 4 -> Contact/Partner ID 20
+    5: 99,   # Warehouse ID 2 -> Contact/Partner ID 10
+    1: 98,   # Warehouse ID 3 -> Contact/Partner ID 15
     # Add more mappings as needed
 }
 
@@ -2139,6 +3079,7 @@ class WarehouseController(http.Controller):
 
             # Get contact_id from map for destination warehouse
             contact_id = WAREHOUSE_CONTACT_MAP.get(dest_warehouse_id)
+            
             if not contact_id:
                 return {'status': 'error', 'message': f'Warehouse {dest_warehouse_id} not found in contact map'}
 
@@ -2153,6 +3094,7 @@ class WarehouseController(http.Controller):
             app_warehouse = request.env['stock.warehouse'].sudo().search([('name', '=', 'App')], limit=1)
             if not app_warehouse:
                 return {'status': 'error', 'message': 'App warehouse not found'}
+            contact_app = WAREHOUSE_CONTACT_MAP.get(app_warehouse.id)
 
             source_location = app_warehouse.lot_stock_id
             if not source_location:
@@ -2289,7 +3231,7 @@ class WarehouseController(http.Controller):
                 'picking_type_id': incoming_picking_type.id,
                 'location_id': supplier_location.id,
                 'location_dest_id': dest_location.id,
-                'partner_id': contact_id,
+                'partner_id': contact_app,
                 'origin': f'Receipt from {delivery.name} (App Transfer)',
                 'note': notes,
                 'move_ids': receipt_move_lines,
