@@ -1714,62 +1714,82 @@ class PosSyncController(http.Controller):
             # Execute exact query
             query = """
                 SELECT
-                    lp.id AS program_id,
-                    COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
-                    lr.id AS rule_id,
-                    lr.mode AS rule_mode,
-                    lr.active AS rule_active,
-                    lr.code AS discount_code,
-                    lr.minimum_qty AS rule_min_qty,
-                    lr.minimum_amount AS rule_min_amount,
-                    
-                    -- Main Product (from loyalty_program.product_id)
-                    pp_main.id AS main_product_id,
-                    COALESCE(pt_main.name->>'ar_001', pt_main.name->>'en_US', '') AS main_product_name,
-                    pp_main.barcode AS main_product_barcode,
-                    pt_main.list_price AS main_product_list_price,
+                lp.id AS program_id,
+                COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
+                lr.id AS rule_id,
+                lr.mode AS rule_mode,
+                lr.active AS rule_active,
+                lr.code AS discount_code,
+                lr.minimum_qty AS rule_min_qty,
+                lr.minimum_amount AS rule_min_amount,
+                lp.product_id AS lp_product_id,
 
-                    -- Eligible Product (from loyalty_rule_product_product_rel)
-                    pp_eligible.id AS eligible_product_id,
-                    COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
-                    pp_eligible.barcode AS eligible_product_barcode,
-                    pt_eligible.list_price AS eligible_product_list_price,
+                -- MAIN PRODUCT (fallback to eligible product when missing)
+                COALESCE(pp_main.id, pp_eligible.id, 0) AS main_product_id,
+                COALESCE(pp_main.product_tmpl_id, pp_eligible.product_tmpl_id, 0) AS main_product_tmpl_id,
+                COALESCE(
+                    pt_main.name->>'ar_001',
+                    pt_main.name->>'en_US',
+                    pt_eligible.name->>'ar_001',
+                    pt_eligible.name->>'en_US',
+                    'NO MAIN PRODUCT'
+                ) AS main_product_name,
+                COALESCE(pp_main.barcode, pp_eligible.barcode, 'N/A') AS main_product_barcode,
+                COALESCE(pt_main.list_price, pt_eligible.list_price, 0) AS main_product_list_price,
+                COALESCE(pt_main.id, pt_eligible.id, 0) AS p_id,
 
-                    -- Reward Product (from loyalty_reward.reward_product_id)
-                    pp_reward.id AS reward_product_id,
-                    COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
-                    pp_reward.barcode AS reward_product_barcode,
-                    pt_reward.list_price AS reward_product_list_price,
+                -- Eligible Product
+                pp_eligible.id AS eligible_product_id,
+                COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
+                pp_eligible.barcode AS eligible_product_barcode,
+                pt_eligible.list_price AS eligible_product_list_price,
 
-                    lrp.product_product_id AS eligible_relation_id,
-                    lr.total_price AS rule_total_price,
-                    lr.after_dis AS rule_after_discount,
-                    lr.discount AS rule_discount
-                FROM loyalty_program lp
-                LEFT JOIN loyalty_rule lr
-                    ON lr.program_id = lp.id
-                LEFT JOIN product_product pp_main
-                    ON pp_main.id = lp.product_id
-                LEFT JOIN product_template pt_main
-                    ON pt_main.id = pp_main.product_tmpl_id
-                    
-                -- Eligible products
-                LEFT JOIN loyalty_rule_product_product_rel lrp
-                    ON lrp.loyalty_rule_id = lr.id
-                LEFT JOIN product_product pp_eligible
-                    ON pp_eligible.id = lrp.product_product_id
-                LEFT JOIN product_template pt_eligible
-                    ON pt_eligible.id = pp_eligible.product_tmpl_id
+                -- Reward Product
+                pp_reward.id AS reward_product_id,
+                COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
+                pp_reward.barcode AS reward_product_barcode,
+                pt_reward.list_price AS reward_product_list_price,
+                pp_reward.product_tmpl_id AS reward_product_tmpl_id,
 
-                -- Reward products
-                LEFT JOIN loyalty_reward lrw
-                    ON lrw.program_id = lp.id
-                LEFT JOIN product_product pp_reward
-                    ON pp_reward.id = lrw.reward_product_id
-                LEFT JOIN product_template pt_reward
-                    ON pt_reward.id = pp_reward.product_tmpl_id
+                -- Additional fields
+                lrp.product_product_id AS eligible_relation_id,
+                lr.total_price AS rule_total_price,
+                lr.after_dis AS rule_after_discount,
+                lr.discount AS rule_discount,
 
-                ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
+                CASE 
+                    WHEN lp.product_id IS NULL THEN 'FALLBACK TO ELIGIBLE'
+                    ELSE 'MAIN PRODUCT OK'
+                END AS main_product_status
+
+            FROM loyalty_program lp
+            LEFT JOIN loyalty_rule lr
+                ON lr.program_id = lp.id
+
+            -- Main product joins
+            LEFT JOIN product_product pp_main
+                ON pp_main.id = lp.product_id
+            LEFT JOIN product_template pt_main
+                ON pt_main.id = pp_main.product_tmpl_id
+
+            -- Eligible products
+            LEFT JOIN loyalty_rule_product_product_rel lrp
+                ON lrp.loyalty_rule_id = lr.id
+            LEFT JOIN product_product pp_eligible
+                ON pp_eligible.id = lrp.product_product_id
+            LEFT JOIN product_template pt_eligible
+                ON pt_eligible.id = pp_eligible.product_tmpl_id
+
+            -- Reward products
+            LEFT JOIN loyalty_reward lrw
+                ON lrw.program_id = lp.id
+            LEFT JOIN product_product pp_reward
+                ON pp_reward.id = lrw.reward_product_id
+            LEFT JOIN product_template pt_reward
+                ON pt_reward.id = pp_reward.product_tmpl_id
+
+            WHERE lr.active = TRUE
+            ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
             """
             
             request.env.cr.execute(query)
@@ -1836,37 +1856,56 @@ class PosSyncController(http.Controller):
                     lr.code AS discount_code,
                     lr.minimum_qty AS rule_min_qty,
                     lr.minimum_amount AS rule_min_amount,
-                    
-                    -- Main Product (from loyalty_program.product_id)
-                    pp_main.id AS main_product_id,
-                    COALESCE(pt_main.name->>'ar_001', pt_main.name->>'en_US', '') AS main_product_name,
-                    pp_main.barcode AS main_product_barcode,
-                    pt_main.list_price AS main_product_list_price,
+                    lp.product_id AS lp_product_id,
 
-                    -- Eligible Product (from loyalty_rule_product_product_rel)
+                    -- MAIN PRODUCT (fallback to eligible product when missing)
+                    COALESCE(pp_main.id, pp_eligible.id, 0) AS main_product_id,
+                    COALESCE(pp_main.product_tmpl_id, pp_eligible.product_tmpl_id, 0) AS main_product_tmpl_id,
+                    COALESCE(
+                        pt_main.name->>'ar_001',
+                        pt_main.name->>'en_US',
+                        pt_eligible.name->>'ar_001',
+                        pt_eligible.name->>'en_US',
+                        'NO MAIN PRODUCT'
+                    ) AS main_product_name,
+                    COALESCE(pp_main.barcode, pp_eligible.barcode, 'N/A') AS main_product_barcode,
+                    COALESCE(pt_main.list_price, pt_eligible.list_price, 0) AS main_product_list_price,
+                    COALESCE(pt_main.id, pt_eligible.id, 0) AS p_id,
+
+                    -- Eligible Product
                     pp_eligible.id AS eligible_product_id,
                     COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
                     pp_eligible.barcode AS eligible_product_barcode,
                     pt_eligible.list_price AS eligible_product_list_price,
 
-                    -- Reward Product (from loyalty_reward.reward_product_id)
+                    -- Reward Product
                     pp_reward.id AS reward_product_id,
                     COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
                     pp_reward.barcode AS reward_product_barcode,
                     pt_reward.list_price AS reward_product_list_price,
+                    pp_reward.product_tmpl_id AS reward_product_tmpl_id,
 
+                    -- Additional fields
                     lrp.product_product_id AS eligible_relation_id,
                     lr.total_price AS rule_total_price,
                     lr.after_dis AS rule_after_discount,
-                    lr.discount AS rule_discount
+                    lr.discount AS rule_discount,
+
+                    CASE 
+                        WHEN lp.product_id IS NULL THEN 'FALLBACK TO ELIGIBLE'
+                        ELSE 'MAIN PRODUCT OK'
+                    END AS main_product_status
+
                 FROM loyalty_program lp
                 LEFT JOIN loyalty_rule lr
                     ON lr.program_id = lp.id
+
+                -- Main product joins
                 LEFT JOIN product_product pp_main
                     ON pp_main.id = lp.product_id
                 LEFT JOIN product_template pt_main
                     ON pt_main.id = pp_main.product_tmpl_id
-                    
+
                 -- Eligible products
                 LEFT JOIN loyalty_rule_product_product_rel lrp
                     ON lrp.loyalty_rule_id = lr.id
@@ -1883,9 +1922,11 @@ class PosSyncController(http.Controller):
                 LEFT JOIN product_template pt_reward
                     ON pt_reward.id = pp_reward.product_tmpl_id
 
-                WHERE lp.id = %s
 
-                ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
+
+                WHERE lr.active = TRUE and lp.id = %s
+
+               ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
             """
             
             request.env.cr.execute(query, (program_id,))
