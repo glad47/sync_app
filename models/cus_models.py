@@ -76,8 +76,15 @@ class ProductTemplate(models.Model):
     def create(self, vals):
         result = super().create(vals)
         
+        # Skip webhook if product is not available in POS or has no barcode
+        if not result.available_in_pos or not result.barcode:
+            return result
+        
         # Skip webhook if product is created by loyalty program
-        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+        context_model = self._context.get('params', {}).get('model')
+        if (self._context.get('from_loyalty_program') or 
+            self._context.get('loyalty_program_id') or 
+            context_model == 'loyalty.program'):
             return result
         
         if result.product_variant_ids:
@@ -130,11 +137,18 @@ class ProductTemplate(models.Model):
         return result
 
     def write(self, vals):
-        # Skip webhook if product is updated by loyalty program
-        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+        # Skip webhook if product is not available in POS or has no barcode
+        if not self.available_in_pos or not self.barcode:
             return super().write(vals)
         
-        price_fields = ['list_price']
+        # Skip webhook if product is updated by loyalty program
+        context_model = self._context.get('params', {}).get('model')
+        if (self._context.get('from_loyalty_program') or 
+            self._context.get('loyalty_program_id') or 
+            context_model == 'loyalty.program'):
+            return super().write(vals)
+        
+        price_fields = ['list_price', 'standard_price']
         price_changed = any(field in vals for field in price_fields)
         
         if not price_changed:
@@ -157,13 +171,21 @@ class ProductTemplate(models.Model):
                     "ids": self.ids,
                     "data": data
                 }
+
                 send_webhook(payload)
         
         return result
 
     def unlink(self):
+        # Skip webhook if product is not available in POS or has no barcode
+        if not self.available_in_pos or not self.barcode:
+            return super().unlink()
+        
         # Skip webhook if product is deleted by loyalty program
-        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+        context_model = self._context.get('params', {}).get('model')
+        if (self._context.get('from_loyalty_program') or 
+            self._context.get('loyalty_program_id') or 
+            context_model == 'loyalty.program'):
             return super().unlink()
         
         product_variant_ids = self.product_variant_ids
@@ -183,8 +205,7 @@ class ProductTemplate(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
-
-
+            
             send_webhook(payload)
         
         return result
