@@ -230,8 +230,7 @@ class ProductTemplate(models.Model):
                 "operation": 2,
                 "type": 0,
                 "model": self._name,
-                "ids": self.ids,
-                "data": self.ids
+                "ids": self.ids
             }
             
             send_webhook(payload)
