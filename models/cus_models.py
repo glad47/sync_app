@@ -120,7 +120,6 @@ class ProductTemplate(models.Model):
 
             print("***************$$$$$$$$$**************")
             print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
-            
             send_webhook(payload)
         return result
 
@@ -167,6 +166,8 @@ class ProductTemplate(models.Model):
                 "ids": self.ids,
                 "data": self.ids
             }
+
+        
             
             send_webhook(payload)
         return result
@@ -277,33 +278,24 @@ class LoyaltyProgram(models.Model):
     @api.model
     def create(self, vals):
         result = super().create(vals)
-        # call the api for it fpr syncronization
-        # data = result.read()[0]
-
-        # # Convert datetime fields to strings
-        # for key, value in data.items():
-        #     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-        #         data[key] = value.isoformat() if value else None
-
-        payload = {
-            "operation": 0,
-            "type": 2,
-            "model": self._name,
-            "ids": result.ids,
-        }
-        send_webhook(payload)
+        
+        # Only send webhook if IDs exist and are not null
+        if result and result.ids:
+            payload = {
+                "operation": 0,
+                "type": 2,
+                "model": self._name,
+                "ids": result.ids,
+            }
+            
+            send_webhook(payload)
         return result
 
     def write(self, vals):
         result = super().write(vals)
-   
-
-        if result: 
-
-          
-
-            # Convert datetime fields to strings
-
+        
+        # Only send webhook if operation succeeded and IDs exist
+        if result and self.ids:
             payload = {
                 "operation": 1,
                 "type": 2,
@@ -311,20 +303,26 @@ class LoyaltyProgram(models.Model):
                 "ids": self.ids,
             }
             send_webhook(payload)
+        
         return result
 
     def unlink(self):
-        ids = self.ids
+        # Store IDs before deletion
+        ids_to_send = self.ids if self.ids else []
+        
         result = super().unlink()
-        if result: 
-
+        
+        # Only send webhook if deletion succeeded and IDs existed
+        if result and ids_to_send:
             payload = {
                 "operation": 2,
                 "type": 2,
                 "model": self._name,
-                "ids": self.ids
+                "ids": ids_to_send
             }
+            
             send_webhook(payload)
+        
         return result
     
 
