@@ -77,10 +77,15 @@ class ProductTemplate(models.Model):
         result = super().create(vals)
         
         # Skip webhook if product is not available in POS or has no barcode
+        print("#####################################")
+        print(result.available_in_pos)
+        print(result.barcode)
         if not result.available_in_pos or not result.barcode:
             return result
         
         # Skip webhook if product is created by loyalty program
+        print("***************************************************")
+        print(self._context)
         context_model = self._context.get('params', {}).get('model')
         if (self._context.get('from_loyalty_program') or 
             self._context.get('loyalty_program_id') or 
@@ -89,25 +94,24 @@ class ProductTemplate(models.Model):
         
         if result.product_variant_ids:
             fields_to_return = [
-                'id', 'name', 'uom_id', 'barcode', 'categ_id',
-                'taxes_id', 'uom_po_id', 'list_price', 'sale_ok', 'purchase_ok', 'product_tag_ids',
-                'sale_delay', 'seller_ids', 'tax_string', 'create_date', 'standard_price', 'volume_uom_name',
-                'weight_uom_name', 'available_in_pos','description', 'attribute_line_ids', 'to_weight', 'pos_categ_id',
-                'location_id', 'display_name', 'product_variant_ids', 'volume', 'weight', 'active'
+                'id', 'name', 'uom_id', 'barcode', 'list_price', 
+                'display_name', 'volume', 'weight', 'active'
             ]
-
+            
             data = result.read(fields_to_return)[0]
-
+            
+            # Add product_id (first variant ID) instead of full product_variant_ids
+            if result.product_variant_ids:
+                data['product_id'] = result.product_variant_ids[0].id
+            else:
+                data['product_id'] = None
+            
             for key, value in data.items():
                 if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
                     data[key] = value.isoformat() if value else None
-
-            relational_fields = [
-                'uom_id', 'categ_id', 'taxes_id', 'pos_categ_id',
-                'uom_po_id', 'seller_ids', 'product_variant_ids', 
-                'location_id', 'product_tag_ids', 'attribute_line_ids'
-            ]
-
+            
+            relational_fields = ['uom_id']
+            
             for field in relational_fields:
                 value = data.get(field)
                 if isinstance(value, list) and value:
@@ -121,7 +125,7 @@ class ProductTemplate(models.Model):
                 elif isinstance(value, int):
                     record = self.env[self.fields_get()[field]['relation']].browse(value)
                     data[field] = record.read()[0] if record else None
-
+            
             payload = {
                 "operation": 0,
                 "type": 0,
@@ -129,7 +133,7 @@ class ProductTemplate(models.Model):
                 "ids": result.ids,
                 "data": data
             }
-
+            
             print("***************$$$$$$$$$**************")
             print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
             send_webhook(payload)
@@ -1717,7 +1721,7 @@ class PosSyncController(http.Controller):
             }
         
 
-        
+
     @http.route('/api/sales/return_order', type='json', auth='public', methods=['POST'])
     def return_sale_order(self):
         """
