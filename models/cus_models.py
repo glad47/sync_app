@@ -77,9 +77,6 @@ class ProductTemplate(models.Model):
         result = super().create(vals)
         
         # Skip webhook if product is not available in POS or has no barcode
-        print("#####################################")
-        print(result.available_in_pos)
-        print(result.barcode)
         if not result.available_in_pos or not result.barcode:
             return result
         
@@ -106,11 +103,19 @@ class ProductTemplate(models.Model):
             else:
                 data['product_id'] = None
             
+            # Remove datetime/date fields instead of converting them
+            keys_to_remove = []
             for key, value in data.items():
                 if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                    data[key] = value.isoformat() if value else None
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                del data[key]
             
             relational_fields = ['uom_id']
+            
+            # Fields to exclude from relational data
+            exclude_fields = ['__last_update', 'create_date', 'write_date', 'create_uid', 'write_uid']
             
             for field in relational_fields:
                 value = data.get(field)
@@ -118,13 +123,32 @@ class ProductTemplate(models.Model):
                     records = self.env[self.fields_get()[field]['relation']].browse(
                         [v[0] if isinstance(v, tuple) else v for v in value]
                     )
-                    data[field] = records.read()
+                    related_data = records.read()
+                    # Remove excluded fields from each record
+                    for record in related_data:
+                        for exclude_field in exclude_fields:
+                            record.pop(exclude_field, None)
+                    data[field] = related_data
                 elif isinstance(value, tuple) and value:
                     record = self.env[self.fields_get()[field]['relation']].browse(value[0])
-                    data[field] = record.read()[0] if record else None
+                    if record:
+                        related_data = record.read()[0]
+                        # Remove excluded fields
+                        for exclude_field in exclude_fields:
+                            related_data.pop(exclude_field, None)
+                        data[field] = related_data
+                    else:
+                        data[field] = None
                 elif isinstance(value, int):
                     record = self.env[self.fields_get()[field]['relation']].browse(value)
-                    data[field] = record.read()[0] if record else None
+                    if record:
+                        related_data = record.read()[0]
+                        # Remove excluded fields
+                        for exclude_field in exclude_fields:
+                            related_data.pop(exclude_field, None)
+                        data[field] = related_data
+                    else:
+                        data[field] = None
             
             payload = {
                 "operation": 0,
