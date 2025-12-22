@@ -75,6 +75,11 @@ class ProductTemplate(models.Model):
     @api.model
     def create(self, vals):
         result = super().create(vals)
+        
+        # Skip webhook if product is created by loyalty program
+        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+            return result
+        
         if result.product_variant_ids:
             fields_to_return = [
                 'id', 'name', 'uom_id', 'barcode', 'categ_id',
@@ -121,16 +126,22 @@ class ProductTemplate(models.Model):
             print("***************$$$$$$$$$**************")
             print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
             send_webhook(payload)
+        
         return result
 
     def write(self, vals):
-        price_fields = ['list_price', 'standard_price']
+        # Skip webhook if product is updated by loyalty program
+        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+            return super().write(vals)
+        
+        price_fields = ['list_price']
         price_changed = any(field in vals for field in price_fields)
         
         if not price_changed:
             return super().write(vals)
         
         result = super().write(vals)
+        
         if self.product_variant_ids:
             if result: 
                 data = vals
@@ -147,15 +158,21 @@ class ProductTemplate(models.Model):
                     "data": data
                 }
                 send_webhook(payload)
+        
         return result
 
     def unlink(self):
+        # Skip webhook if product is deleted by loyalty program
+        if self._context.get('from_loyalty_program') or self._context.get('loyalty_program_id'):
+            return super().unlink()
+        
         product_variant_ids = self.product_variant_ids
         ids = []
         name = ''
         if product_variant_ids:
             ids = product_variant_ids.ids
             name = product_variant_ids._name
+        
         result = super().unlink()
         
         if result: 
@@ -167,9 +184,9 @@ class ProductTemplate(models.Model):
                 "data": self.ids
             }
 
-        
-            
+
             send_webhook(payload)
+        
         return result
 
 
