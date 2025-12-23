@@ -5,10 +5,15 @@
     'author': 'Gladdema',
     'website': 'xxx',
     'depends': [
-        'pos_loyalty',
-        'purchase',      # Added for purchase.order
-        'stock',         # Added for stock moves and pickings
-        'purchase_stock' # Added for purchase-stock integration
+        'base',
+        'product',
+        'sale_management',
+        'purchase',
+        'stock',
+        'point_of_sale',
+        'loyalty',
+        'sale_stock',
+        'purchase_stock',
     ],
     'data': [
         'security/auth_user_token_security.xml',
@@ -21,4 +26,5 @@
     'installable': True,
     'application': True,
     'license': 'LGPL-3',
+    'sequence': 101,
 }
