@@ -29,4 +29,14 @@
               sequence="2"
               groups="sync_app.group_api_admin"/>
 
+    <!-- ============================================ -->
+    <!-- WEBHOOK LOGS MENU -->
+    <!-- ============================================ -->
+    <menuitem id="menu_webhook_log"
+              name="Webhook Logs"
+              parent="menu_sync_app_root"
+              action="action_webhook_log"
+              sequence="3"
+              groups="sync_app.group_api_admin,sync_app.group_api_user"/>
+
 </odoo>

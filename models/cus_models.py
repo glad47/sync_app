@@ -27,10 +27,7 @@ def sanitize(obj):
 
 
 def _get_webhook_config():
-    """
-    Get webhook configuration from database.
-    Returns None if not configured or disabled.
-    """
+    """Get webhook configuration from database."""
     try:
         from odoo import api, SUPERUSER_ID
         from odoo.modules.registry import Registry
@@ -45,13 +42,7 @@ def _get_webhook_config():
             env = api.Environment(cr, SUPERUSER_ID, {})
             config = env['sync.app.config'].search([('active', '=', True)], limit=1)
             
-            if not config:
-                return None
-            
-            if not config.webhook_enabled:
-                return None
-            
-            if not config.webhook_url:
+            if not config or not config.webhook_enabled or not config.webhook_url:
                 return None
             
             return {
@@ -67,7 +58,101 @@ def _get_webhook_config():
         return None
 
 
-def _webhook_worker(payload, config):
+def _create_webhook_log(payload, config):
+    """Create a webhook log entry"""
+    try:
+        from odoo import api, SUPERUSER_ID
+        from odoo.modules.registry import Registry
+        import odoo
+        
+        db_name = odoo.tools.config.get('db_name')
+        if not db_name:
+            _logger.error("No database name found")
+            return None
+        
+        registry = Registry(db_name)
+        with registry.cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            
+            headers = {'Content-Type': 'application/json'}
+            if config.get('auth_token'):
+                headers['Authorization'] = f'Bearer {config["auth_token"]}'
+            
+            # Map integer operation from webhook to string for database
+            operation_map = {
+                0: 'create', 
+                1: 'update', 
+                2: 'delete',
+                3: 'create',  # validate operations treated as create
+                6: 'create',  # purchase order operations
+                7: 'create'   # stock picking operations
+            }
+            operation_value = operation_map.get(payload.get('operation', 0), 'create')
+            
+            _logger.info(f"Creating webhook log - Model: {payload.get('model')}, Operation: {operation_value}")
+            
+            log = env['webhook.log'].create({
+                'url': config['url'],
+                'model': payload.get('model', ''),
+                'operation': operation_value,
+                'record_ids': str(payload.get('ids', [])),
+                'payload': json.dumps(payload, indent=2),
+                'headers': json.dumps(headers, indent=2),
+                'status': 'pending',
+                'max_retries': config['max_retries'],
+            })
+            
+            log_id = log.id
+            cr.commit()
+            
+            _logger.info(f"✅ Webhook log created with ID: {log_id}")
+            return log_id
+            
+    except Exception as e:
+        _logger.error(f"Failed to create webhook log: {e}")
+        import traceback
+        _logger.error(traceback.format_exc())
+        return None
+
+
+def _update_webhook_log(log_id, values):
+    """Update webhook log entry"""
+    if not log_id:
+        _logger.warning("No log_id provided to update")
+        return
+        
+    try:
+        from odoo import api, SUPERUSER_ID
+        from odoo.modules.registry import Registry
+        import odoo
+        
+        db_name = odoo.tools.config.get('db_name')
+        if not db_name:
+            _logger.error("No database name found")
+            return
+        
+        registry = Registry(db_name)
+        with registry.cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            log = env['webhook.log'].browse(log_id)
+            
+            if not log.exists():
+                _logger.error(f"Webhook log {log_id} does not exist")
+                return
+                
+            _logger.info(f"Updating webhook log {log_id} with values: {values.keys()}")
+            log.write(values)
+            cr.commit()
+            
+            _logger.info(f"✅ Webhook log {log_id} updated successfully")
+            
+    except Exception as e:
+        _logger.error(f"Failed to update webhook log {log_id}: {e}")
+        import traceback
+        _logger.error(traceback.format_exc())
+
+
+def _webhook_worker(payload, config, log_id=None):
     """Worker function that sends webhook"""
     url = config['url']
     timeout = config['timeout']
@@ -82,11 +167,21 @@ def _webhook_worker(payload, config):
         headers['Authorization'] = f'Bearer {auth_token}'
     
     retry_count = 0
+    duration_ms = 0
     
     while True:
         try:
             _logger.info(f"Sending webhook to {url} (attempt {retry_count + 1})")
             
+            # Update status to sending
+            if log_id:
+                _update_webhook_log(log_id, {
+                    'status': 'sending',
+                    'retry_count': retry_count,
+                    'sent_at': datetime.now()
+                })
+            
+            start_time = time.time()
             response = requests.post(
                 url,
                 json=payload,
@@ -94,30 +189,66 @@ def _webhook_worker(payload, config):
                 timeout=timeout,
                 verify=verify_ssl
             )
+            duration_ms = int((time.time() - start_time) * 1000)
+            
             response.raise_for_status()
             
             if response.ok:
                 _logger.info("✅ Webhook succeeded!")
+                response_body = None
                 try:
+                    response_body = json.dumps(response.json(), indent=2)
                     _logger.info(f"Response: {response.json()}")
                 except ValueError:
+                    response_body = response.text
                     _logger.info(f"Response: {response.text}")
+                
+                # Update log as success
+                if log_id:
+                    _update_webhook_log(log_id, {
+                        'status': 'success',
+                        'status_code': response.status_code,
+                        'response_body': response_body,
+                        'completed_at': datetime.now(),
+                        'duration_ms': duration_ms
+                    })
                 break
             else:
                 _logger.warning(f"Webhook failed: {response.reason}")
+                raise requests.exceptions.HTTPError(response.reason)
 
         except requests.exceptions.RequestException as e:
             _logger.error(f"Webhook error: {e}")
-
-        retry_count += 1
-        
-        # Check max retries (0 = unlimited)
-        if max_retries > 0 and retry_count >= max_retries:
-            _logger.error(f"Max retries ({max_retries}) reached, giving up")
-            break
-        
-        _logger.info(f"Retrying in {retry_delay} seconds...")
-        time.sleep(retry_delay)
+            
+            retry_count += 1
+            
+            # Check max retries (0 = unlimited)
+            if max_retries > 0 and retry_count >= max_retries:
+                _logger.error(f"Max retries ({max_retries}) reached, giving up")
+                
+                # Update log as error
+                if log_id:
+                    _update_webhook_log(log_id, {
+                        'status': 'error',
+                        'error_message': str(e),
+                        'retry_count': retry_count,
+                        'completed_at': datetime.now(),
+                        'duration_ms': duration_ms
+                    })
+                break
+            
+            # Update log as retrying
+            if log_id:
+                next_retry = datetime.now() + timedelta(seconds=retry_delay)
+                _update_webhook_log(log_id, {
+                    'status': 'retrying',
+                    'error_message': str(e),
+                    'retry_count': retry_count,
+                    'next_retry_at': next_retry
+                })
+            
+            _logger.info(f"Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
 
 
 def send_webhook(payload):
@@ -136,8 +267,31 @@ def send_webhook(payload):
     # Sanitize payload
     payload = sanitize(payload)
     
+    _logger.info(f"Preparing to send webhook for model: {payload.get('model')}")
+    
+    # Create log entry
+    log_id = _create_webhook_log(payload, config)
+    
+    if not log_id:
+        _logger.error("Failed to create webhook log, aborting webhook send")
+        return
+    
+    _logger.info(f"Starting webhook worker thread for log_id: {log_id}")
+    
     # Send in background thread
-    thread = threading.Thread(target=_webhook_worker, args=(payload, config))
+    thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
+    thread.daemon = True
+    thread.start()
+
+
+def send_webhook_with_log(payload, log_id=None):
+    """Send webhook with existing log ID (for manual retry)"""
+    config = _get_webhook_config()
+    if not config:
+        return
+    
+    payload = sanitize(payload)
+    thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
     thread.daemon = True
     thread.start()
 
@@ -147,6 +301,49 @@ def get_sync_config():
     if not config:
         return None
     return config
+
+def _create_checkpoint_log(checkpoint_name, data):
+    """Create a checkpoint log for debugging"""
+    try:
+        from odoo import api, SUPERUSER_ID
+        from odoo.modules.registry import Registry
+        import odoo
+        
+        db_name = odoo.tools.config.get('db_name')
+        if not db_name:
+            return
+        
+        registry = Registry(db_name)
+        with registry.cursor() as cr:
+            env = api.Environment(cr, SUPERUSER_ID, {})
+            
+            payload = {
+                "operation": 1,  # update
+                "type": 99,  # checkpoint type
+                "model": checkpoint_name,
+                "ids": data.get('product_ids', []),
+                "data": data
+            }
+            
+            # Map operation for checkpoint logs
+            operation_value = 'update'
+            
+            env['webhook.log'].create({
+                'url': 'CHECKPOINT',
+                'model': checkpoint_name,
+                'operation': operation_value,
+                'record_ids': str(data.get('product_ids', [])),
+                'payload': json.dumps(payload, indent=2),
+                'headers': json.dumps({'checkpoint': True}, indent=2),
+                'status': 'success',
+                'max_retries': 0,
+            })
+            cr.commit()
+            
+            _logger.info(f"✅ Checkpoint log created: {checkpoint_name}")
+            
+    except Exception as e:
+        _logger.error(f"Failed to create checkpoint log: {e}")
 
 class ProductTemplate(models.Model):
     _inherit = 'product.template'
@@ -244,8 +441,27 @@ class ProductTemplate(models.Model):
         return result
 
     def write(self, vals):
+        print(" ******************************1***************************")
+        
+        # Checkpoint 1: Method called
+        _create_checkpoint_log("product.write.checkpoint_1", {
+            "checkpoint": "write method called",
+            "vals": vals,
+            "product_ids": self.ids
+        })
+        
         # Skip webhook if product is not available in POS or has no barcode
         if not self.available_in_pos or not self.barcode:
+            print(" *****************************2*****************************")
+            
+            # Checkpoint 2: Skipped - not in POS or no barcode
+            _create_checkpoint_log("product.write.checkpoint_2", {
+                "checkpoint": "skipped - not available in POS or no barcode",
+                "available_in_pos": self.available_in_pos,
+                "barcode": self.barcode,
+                "product_ids": self.ids
+            })
+            
             return super().write(vals)
         
         # Skip webhook if product is updated by loyalty program
@@ -253,17 +469,49 @@ class ProductTemplate(models.Model):
         if (self._context.get('from_loyalty_program') or 
             self._context.get('loyalty_program_id') or 
             context_model == 'loyalty.program'):
+            print(" *****************************3*****************************")
+            
+            # Checkpoint 3: Skipped - loyalty program
+            _create_checkpoint_log("product.write.checkpoint_3", {
+                "checkpoint": "skipped - loyalty program context",
+                "context_model": context_model,
+                "product_ids": self.ids
+            })
+            
             return super().write(vals)
         
         price_fields = ['list_price', 'standard_price']
         price_changed = any(field in vals for field in price_fields)
         
         if not price_changed:
+            # Checkpoint: Skipped - no price change
+            _create_checkpoint_log("product.write.checkpoint_no_price", {
+                "checkpoint": "skipped - no price change",
+                "vals": vals,
+                "product_ids": self.ids
+            })
             return super().write(vals)
         
         result = super().write(vals)
+        print(" *****************************4*****************************")
+        
+        # Checkpoint 4: After write executed
+        _create_checkpoint_log("product.write.checkpoint_4", {
+            "checkpoint": "write executed successfully",
+            "result": result,
+            "product_ids": self.ids
+        })
         
         if self.product_variant_ids:
+            print(" *****************************5*****************************")
+            
+            # Checkpoint 5: Has product variants
+            _create_checkpoint_log("product.write.checkpoint_5", {
+                "checkpoint": "has product variants",
+                "variant_count": len(self.product_variant_ids),
+                "product_ids": self.ids
+            })
+            
             if result: 
                 data = vals
 
@@ -278,7 +526,15 @@ class ProductTemplate(models.Model):
                     "ids": self.ids,
                     "data": data
                 }
-
+                print(" *****************************6*****************************")
+                
+                # Checkpoint 6: Sending webhook
+                _create_checkpoint_log("product.write.checkpoint_6", {
+                    "checkpoint": "sending webhook",
+                    "payload": payload,
+                    "product_ids": self.ids
+                })
+                
                 send_webhook(payload)
         
         return result

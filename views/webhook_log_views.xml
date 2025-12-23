@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+<data>
+    <!-- Tree View -->
+    <record id="view_webhook_log_tree" model="ir.ui.view">
+        <field name="name">webhook.log.tree</field>
+        <field name="model">webhook.log</field>
+        <field name="arch" type="xml">
+            <tree string="Webhook Logs" decoration-success="status=='success'" 
+                  decoration-danger="status=='error'" decoration-warning="status=='retrying'">
+                <field name="create_date"/>
+                <field name="name"/>
+                <field name="url"/>
+                <field name="operation"/>
+                <field name="status"/>
+                <field name="status_code"/>
+                <field name="retry_count"/>
+                <field name="duration_ms"/>
+                <field name="completed_at"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Form View -->
+    <record id="view_webhook_log_form" model="ir.ui.view">
+    <field name="name">webhook.log.form</field>
+    <field name="model">webhook.log</field>
+    <field name="arch" type="xml">
+        <form string="Webhook Log">
+            <header>
+                <field name="status" widget="statusbar" statusbar_visible="pending,sending,success,error,retrying"/>
+            </header>
+            <sheet>
+                <div class="oe_title">
+                    <h1>
+                        <field name="name"/>
+                    </h1>
+                </div>
+                <group>
+                    <group>
+                        <field name="url"/>
+                        <field name="model"/>
+                        <field name="operation"/>
+                        <field name="record_ids"/>
+                    </group>
+                    <group>
+                        <field name="status_code"/>
+                        <field name="retry_count"/>
+                        <field name="max_retries"/>
+                        <field name="duration_ms"/>
+                    </group>
+                    <group>
+                        <field name="create_date"/>
+                        <field name="sent_at"/>
+                        <field name="completed_at"/>
+                        <field name="next_retry_at" attrs="{'invisible': [('status', 'not in', ['retrying'])]}"/>
+                    </group>
+                </group>
+                <notebook>
+                    <page string="Request">
+                        <group>
+                            <field name="headers" widget="text"/>
+                            <field name="payload" widget="ace" options="{'mode': 'json'}"/>
+                        </group>
+                    </page>
+                    <page string="Response">
+                        <group>
+                            <field name="response_body" widget="ace" options="{'mode': 'json'}"/>
+                            <field name="error_message" widget="text" attrs="{'invisible': [('error_message', '=', False)]}"/>
+                        </group>
+                    </page>
+                </notebook>
+            </sheet>
+        </form>
+    </field>
+</record>
+    <!-- Search View -->
+    <record id="view_webhook_log_search" model="ir.ui.view">
+    <field name="name">webhook.log.search</field>
+    <field name="model">webhook.log</field>
+    <field name="arch" type="xml">
+        <search>
+            <field name="name"/>
+            <field name="model"/>
+            <field name="url"/>
+            <filter string="Success" name="success" domain="[('status', '=', 'success')]"/>
+            <filter string="Error" name="error" domain="[('status', '=', 'error')]"/>
+            <filter string="Retrying" name="retrying" domain="[('status', '=', 'retrying')]"/>
+            <filter string="Pending" name="pending" domain="[('status', '=', 'pending')]"/>
+            <separator/>
+            <filter string="Today" name="today" domain="[('create_date', '&gt;=', context_today())]"/>
+            <filter string="Last 7 Days" name="last_7_days" domain="[('create_date', '&gt;=', (context_today() - datetime.timedelta(days=7)).strftime('%Y-%m-%d'))]"/>
+            <group expand="0" string="Group By">
+                <filter string="Status" name="group_status" context="{'group_by': 'status'}"/>
+                <filter string="Model" name="group_model" context="{'group_by': 'model'}"/>
+                <filter string="Operation" name="group_operation" context="{'group_by': 'operation'}"/>
+                <filter string="Date" name="group_date" context="{'group_by': 'create_date:day'}"/>
+            </group>
+        </search>
+    </field>
+</record>
+
+    <!-- Action -->
+    <record id="action_webhook_log" model="ir.actions.act_window">
+        <field name="name">Webhook Logs</field>
+        <field name="res_model">webhook.log</field>
+        <field name="view_mode">tree,form</field>
+        <field name="context">{'search_default_today': 1}</field>
+    </record>
+    </data>
+</odoo>
