@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+<data>
+    <!-- ============================================ -->
+    <!-- SYNC APP CONFIGURATION FORM VIEW -->
+    <!-- ============================================ -->
+    <record id="view_sync_app_config_form" model="ir.ui.view">
+        <field name="name">sync.app.config.form</field>
+        <field name="model">sync.app.config</field>
+        <field name="arch" type="xml">
+            <form string="Sync App Configuration">
+                <sheet>
+                    <widget name="web_ribbon" title="Active" bg_color="bg-success"
+                            attrs="{'invisible': [('active', '=', False)]}"/>
+                    <widget name="web_ribbon" title="Inactive" bg_color="bg-danger"
+                            attrs="{'invisible': [('active', '=', True)]}"/>
+                    
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name" placeholder="Configuration Name"/>
+                        </h1>
+                    </div>
+                    
+                    <field name="active" invisible="1"/>
+                    
+                    <notebook>
+                        <!-- User & POS Tab -->
+                        <page string="User &amp; POS" name="user_pos_config">
+                            <group>
+                                <group string="User">
+                                    <field name="app_user_id" 
+                                           options="{'no_create': True, 'no_open': True}"
+                                           required="1"/>
+                                </group>
+                                <group string="POS">
+                                    <field name="app_pos_config_id" 
+                                           options="{'no_create': True, 'no_open': True}"
+                                           />
+                                </group>
+                            </group>
+                        </page>
+                        
+                        <!-- Warehouse Tab -->
+                        <page string="Warehouse" name="warehouse_config">
+                            <group>
+                                <group string="Main Warehouse">
+                                    <field name="app_warehouse_id" 
+                                           options="{'no_create': True, 'no_open': True}"
+                                           required="1"/>
+                                </group>
+                            </group>
+                            
+                            <separator string="Warehouse Contact Mappings"/>
+                            <field name="mapping_ids">
+                                <tree editable="bottom">
+                                    <field name="warehouse_id" options="{'no_create': True}"/>
+                                    <field name="contact_id" options="{'no_create': True}"/>
+                                    <field name="notes" optional="hide"/>
+                                </tree>
+                            </field>
+                        </page>
+                        
+                        <!-- Payment Tab -->
+                        <page string="Payment" name="payment_config">
+                            <group>
+                                <group string="POS Payment">
+                                    <field name="app_payment_method_id" 
+                                           options="{'no_create': True, 'no_open': True}"
+                                           required="1"/>
+                                </group>
+                                <group string="Sales Payment">
+                                    <field name="app_payment_journal_id" 
+                                           options="{'no_create': True, 'no_open': True}"
+                                           required="1"/>
+                                </group>
+                            </group>
+                        </page>
+                        
+                        <!-- Webhook Tab -->
+                        <page string="Webhook" name="webhook_config">
+                            <group>
+                                <group string="Settings">
+                                    <field name="webhook_enabled"/>
+                                    <field name="webhook_url" 
+                                           placeholder="https://example.com/api/webhook"
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                    <field name="webhook_auth_token" 
+                                           password="True"
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                </group>
+                                <group string="Connection">
+                                    <field name="webhook_timeout" 
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                    <field name="webhook_retry_delay" 
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                    <field name="webhook_max_retries" 
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                    <field name="webhook_verify_ssl" 
+                                           attrs="{'readonly': [('webhook_enabled', '=', False)]}"/>
+                                </group>
+                            </group>
+                            <div class="alert alert-warning" role="alert"
+                                 attrs="{'invisible': ['|', ('webhook_verify_ssl', '=', True), ('webhook_enabled', '=', False)]}">
+                                <strong>Warning:</strong> SSL verification is disabled.
+                            </div>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ============================================ -->
+    <!-- SERVER ACTION -->
+    <!-- ============================================ -->
+    <record id="action_open_sync_app_config" model="ir.actions.server">
+        <field name="name">Open Sync App Configuration</field>
+        <field name="model_id" ref="model_sync_app_config"/>
+        <field name="state">code</field>
+        <field name="code">
+config = env['sync.app.config'].sudo().search([('active', '=', True)], limit=1)
+if not config:
+    config = env['sync.app.config'].sudo().search([], limit=1)
+if not config:
+    config = env['sync.app.config'].sudo().create({
+        'name': 'Main Configuration',
+        'active': True,
+        'webhook_enabled': True,
+        'webhook_timeout': 10,
+        'webhook_retry_delay': 60,
+        'webhook_max_retries': 0,
+        'webhook_verify_ssl': True,
+    })
+
+action = {
+    'type': 'ir.actions.act_window',
+    'name': 'Sync App Configuration',
+    'res_model': 'sync.app.config',
+    'view_mode': 'form',
+    'res_id': config.id,
+    'target': 'current',
+}
+        </field>
+    </record>
+</data>
+</odoo>

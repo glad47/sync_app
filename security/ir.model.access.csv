@@ -1,4 +1,7 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_auth_user_token_user,auth.user_token user,model_auth_user_token,sync_app.group_api_user,1,0,0,0
 access_auth_user_token_admin,auth.user_token admin,model_auth_user_token,sync_app.group_api_admin,1,1,1,1
-
+access_sync_app_config_user,sync.app.config user,model_sync_app_config,sync_app.group_api_user,1,0,0,0
+access_sync_app_config_admin,sync.app.config admin,model_sync_app_config,sync_app.group_api_admin,1,1,1,1
+access_warehouse_contact_mapping_user,warehouse.contact.mapping user,model_warehouse_contact_mapping,sync_app.group_api_user,1,0,0,0
+access_warehouse_contact_mapping_admin,warehouse.contact.mapping admin,model_warehouse_contact_mapping,sync_app.group_api_admin,1,1,1,1

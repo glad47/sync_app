@@ -14,6 +14,7 @@
         'security/auth_user_token_security.xml',
         'security/ir.model.access.csv',
         'views/auth_user_token_views.xml',
+        'views/sync_app_config_views.xml',
         'views/auth_user_token_menu.xml',
     ],
     'installable': True,
