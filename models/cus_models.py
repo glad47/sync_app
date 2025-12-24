@@ -2581,8 +2581,7 @@ class PosSyncController(http.Controller):
                     LEFT JOIN product_template pt_reward
                         ON pt_reward.id = pp_reward.product_tmpl_id
 
-                    WHERE lr.active = TRUE
-                    AND (
+                    WHERE  (
                         lp.create_date > %s 
                         OR lp.write_date > %s
                         OR lr.create_date > %s
@@ -3071,7 +3070,80 @@ class PosSyncController(http.Controller):
 
 
         
-
+    @http.route('/api/product/delivery-cost/create', type='json', auth='public', methods=['POST'])
+    def create_delivery_cost_product(self):
+        """
+        Create a delivery cost product
+        
+        Request:
+        POST /api/product/delivery-cost/create
+        Headers: Authorization: your-token
+        Body:
+        {
+            "name": "Delivery Cost",
+            "price": 50.0,
+            "barcode": "DELIV001"
+        }
+        
+        Response:
+        {
+            "status": "success",
+            "data": {
+                "product_id": 123,
+                "template_id": 45,
+                "name": "Delivery Cost",
+                "price": 50.0
+            }
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+        
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired', 'status': 401}
+        
+        try:
+            # For type='json', read data from request body
+            data = json.loads(request.httprequest.data)
+            
+            name = data.get('name', 'Delivery Cost')
+            price = float(data.get('price', 0.0))
+            barcode = data.get('barcode')
+            
+            _logger.info(f"Creating delivery product - Name: {name}, Price: {price}, Barcode: {barcode}")
+            
+            # Create product
+            product = request.env['product.product'].sudo().create({
+                'name': name,
+                'type': 'service',
+                'list_price': price,
+                'standard_price': price,
+                'categ_id': request.env.ref('product.product_category_all').id,
+                'barcode': barcode if barcode else False,
+                'sale_ok': True,
+                'purchase_ok': False,
+                'invoice_policy': 'order',
+            })
+            
+            _logger.info(f"✅ Delivery product created - ID: {product.id}, Price: {product.list_price}")
+            
+            return {
+                'status': 'success',
+                'data': {
+                    'product_id': product.id,
+                    'template_id': product.product_tmpl_id.id,
+                    'name': product.name,
+                    'price': product.list_price,
+                    'barcode': product.barcode
+                }
+            }
+        
+        except Exception as e:
+            _logger.exception("Failed to create delivery cost product")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
 
     @http.route('/api/products/prices', type='json', auth='public', methods=['GET'])
     def get_product_prices(self, **kwargs):
@@ -3164,6 +3236,147 @@ class PosSyncController(http.Controller):
             user.sudo().write({'token': token, 'token_expiration': expiration})
             return {'token': token, 'expires_at': expiration.isoformat()}
         return {'error': 'Invalid credentials'}, 401    
+    
+
+
+
+    @http.route('/api/invoice/<int:invoice_id>', type='json', auth='public', methods=['GET'])
+    def get_invoice_by_id(self, invoice_id, **kwargs):
+        """
+        Get invoice by ID with ZATCA delivery status
+        
+        Request:
+        GET /api/invoice/123
+        Headers: Authorization: your-token
+        
+        Response:
+        {
+            "status": "success",
+            "data": {
+                "id": 123,
+                "name": "INV/2024/0001",
+                "partner_name": "Customer Name",
+                "date": "2024-12-22",
+                "amount_total": 1150.0,
+                "state": "posted",
+                "zatca_status": "delivered",
+                "zatca_delivery_date": "2024-12-22T10:30:00"
+            }
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+        
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired', 'status': 401}
+        
+        try:
+            # Query invoice with ZATCA status
+            query = """
+                SELECT 
+                    am.id,
+                    am.name,
+                    rp.name AS partner_name,
+                    am.invoice_date AS date,
+                    am.amount_total,
+                    am.state,
+                    am.zatca_status,
+                    am.zatca_delivery_date,
+                    am.write_date
+                FROM account_move am
+                LEFT JOIN res_partner rp ON rp.id = am.partner_id
+                WHERE am.id = %s
+                    AND am.move_type IN ('out_invoice', 'out_refund')
+                LIMIT 1;
+            """
+            
+            request.env.cr.execute(query, (invoice_id,))
+            result = request.env.cr.dictfetchone()
+            
+            if not result:
+                return {
+                    'status': 'error',
+                    'message': 'Invoice not found'
+                }
+            
+            # Convert datetime fields to ISO format
+            for key, value in result.items():
+                if isinstance(value, (datetime, date)):
+                    result[key] = value.isoformat() if value else None
+            
+            return {
+                'status': 'success',
+                'data': result
+            }
+        
+        except Exception as e:
+            _logger.exception("Failed to fetch invoice")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+        
+
+
+    @http.route('/api/invoice/<int:invoice_id>/pdf', type='http', auth='public', methods=['GET'])
+    def get_invoice_pdf(self, invoice_id, **kwargs):
+        """
+        Get invoice PDF by ID
+        
+        Request:
+        GET /api/invoice/123/pdf
+        Headers: Authorization: your-token
+        
+        Response:
+        PDF file download
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+        
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_json_response({
+                'error': 'Unauthorized or token expired',
+                'status': 401
+            }, status=401)
+        
+        try:
+            # Find the invoice
+            invoice = request.env['account.move'].sudo().search([
+                ('id', '=', invoice_id),
+                ('move_type', 'in', ['out_invoice', 'out_refund'])
+            ], limit=1)
+            
+            if not invoice:
+                return request.make_json_response({
+                    'error': 'Invoice not found',
+                    'status': 404
+                }, status=404)
+            
+            # Generate PDF
+            pdf_content, _ = request.env['ir.actions.report'].sudo()._render_qweb_pdf(
+                'account.report_invoice',
+                [invoice.id]
+            )
+            
+            # Return PDF as download
+            pdfhttpheaders = [
+                ('Content-Type', 'application/pdf'),
+                ('Content-Length', len(pdf_content)),
+                ('Content-Disposition', f'attachment; filename="{invoice.name}.pdf"')
+            ]
+            
+            return request.make_response(pdf_content, headers=pdfhttpheaders)
+        
+        except Exception as e:
+            _logger.exception("Failed to generate invoice PDF")
+            return request.make_json_response({
+                'error': str(e),
+                'status': 500
+            }, status=500)    
+        
+
+
+
             
         
 # Add this to your existing code
@@ -3411,7 +3624,7 @@ class PurchaseOrderReceivingController(http.Controller):
                     LEFT JOIN uom_uom uom ON uom.id = pol.product_uom
 
                     WHERE sw.id = %s
-                    AND po.state IN ('purchase', 'done')
+                    AND po.state IN ('purchase', 'cancel')
                     AND (po.create_date > %s OR po.write_date > %s)
                     ORDER BY po.id, pol.id;
                 """
@@ -4015,6 +4228,7 @@ class StockReceivingController(http.Controller):
                         -- Change type
                         CASE 
                             WHEN sp.create_date > %s THEN 'created'
+                            WHEN sp.state = 'cancel' AND sp.write_date > %s THEN 'cancelled'
                             WHEN sp.state = 'done' AND sp.date_done > %s THEN 'validated'
                             WHEN sp.write_date > %s AND sp.create_date <= %s THEN 'updated'
                         END AS change_type
@@ -4030,6 +4244,7 @@ class StockReceivingController(http.Controller):
 
                     WHERE sw.id = %s
                     AND spt.code = 'incoming'
+                    AND sp.state IN ('confirmed', 'cancel')
                     AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
                     ORDER BY sp.id, sm.id;
                 """
