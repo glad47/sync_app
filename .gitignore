@@ -1,0 +1,16 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore Odoo compiled assets
+*.log
+*.swp
+
+# Ignore temporary files
+*.tmp
+*.DS_Store
+
+# Ignore Python virtual environments (if any)
+venv/
+env/

@@ -345,174 +345,174 @@ def _create_checkpoint_log(checkpoint_name, data):
     except Exception as e:
         _logger.error(f"Failed to create checkpoint log: {e}")
 
-class ProductTemplate(models.Model):
-    _inherit = 'product.template'
+# class ProductTemplate(models.Model):
+#     _inherit = 'product.template'
     
-    @api.model
-    def create(self, vals):
-        result = super().create(vals)
+#     @api.model
+#     def create(self, vals):
+#         result = super().create(vals)
         
-        # Skip webhook if product is not available in POS or has no barcode
-        if not result.available_in_pos or not result.barcode:
-            return result
+#         # Skip webhook if product is not available in POS or has no barcode
+#         if not result.available_in_pos or not result.barcode:
+#             return result
         
-        # Skip webhook if product is created by loyalty program
-        print("***************************************************")
-        print(self._context)
-        context_model = self._context.get('params', {}).get('model')
-        if (self._context.get('from_loyalty_program') or 
-            self._context.get('loyalty_program_id') or 
-            context_model == 'loyalty.program'):
-            return result
+#         # Skip webhook if product is created by loyalty program
+#         print("***************************************************")
+#         print(self._context)
+#         context_model = self._context.get('params', {}).get('model')
+#         if (self._context.get('from_loyalty_program') or 
+#             self._context.get('loyalty_program_id') or 
+#             context_model == 'loyalty.program'):
+#             return result
         
-        if result.product_variant_ids:
-            fields_to_return = [
-                'id', 'name', 'uom_id', 'barcode', 'list_price', 
-                'display_name', 'volume', 'weight', 'active'
-            ]
+#         if result.product_variant_ids:
+#             fields_to_return = [
+#                 'id', 'name', 'uom_id', 'barcode', 'list_price', 
+#                 'display_name', 'volume', 'weight', 'active'
+#             ]
             
-            data = result.read(fields_to_return)[0]
+#             data = result.read(fields_to_return)[0]
             
-            # Add product_id (first variant ID) instead of full product_variant_ids
-            if result.product_variant_ids:
-                data['product_id'] = result.product_variant_ids[0].id
-            else:
-                data['product_id'] = None
+#             # Add product_id (first variant ID) instead of full product_variant_ids
+#             if result.product_variant_ids:
+#                 data['product_id'] = result.product_variant_ids[0].id
+#             else:
+#                 data['product_id'] = None
             
-            # Remove datetime/date fields instead of converting them
-            keys_to_remove = []
-            for key, value in data.items():
-                if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                    keys_to_remove.append(key)
+#             # Remove datetime/date fields instead of converting them
+#             keys_to_remove = []
+#             for key, value in data.items():
+#                 if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
+#                     keys_to_remove.append(key)
             
-            for key in keys_to_remove:
-                del data[key]
+#             for key in keys_to_remove:
+#                 del data[key]
             
-            relational_fields = ['uom_id']
+#             relational_fields = ['uom_id']
             
-            # Fields to exclude from relational data
-            exclude_fields = ['__last_update', 'create_date', 'write_date', 'create_uid', 'write_uid']
+#             # Fields to exclude from relational data
+#             exclude_fields = ['__last_update', 'create_date', 'write_date', 'create_uid', 'write_uid']
             
-            for field in relational_fields:
-                value = data.get(field)
-                if isinstance(value, list) and value:
-                    records = self.env[self.fields_get()[field]['relation']].browse(
-                        [v[0] if isinstance(v, tuple) else v for v in value]
-                    )
-                    related_data = records.read()
-                    # Remove excluded fields from each record
-                    for record in related_data:
-                        for exclude_field in exclude_fields:
-                            record.pop(exclude_field, None)
-                    data[field] = related_data
-                elif isinstance(value, tuple) and value:
-                    record = self.env[self.fields_get()[field]['relation']].browse(value[0])
-                    if record:
-                        related_data = record.read()[0]
-                        # Remove excluded fields
-                        for exclude_field in exclude_fields:
-                            related_data.pop(exclude_field, None)
-                        data[field] = related_data
-                    else:
-                        data[field] = None
-                elif isinstance(value, int):
-                    record = self.env[self.fields_get()[field]['relation']].browse(value)
-                    if record:
-                        related_data = record.read()[0]
-                        # Remove excluded fields
-                        for exclude_field in exclude_fields:
-                            related_data.pop(exclude_field, None)
-                        data[field] = related_data
-                    else:
-                        data[field] = None
+#             for field in relational_fields:
+#                 value = data.get(field)
+#                 if isinstance(value, list) and value:
+#                     records = self.env[self.fields_get()[field]['relation']].browse(
+#                         [v[0] if isinstance(v, tuple) else v for v in value]
+#                     )
+#                     related_data = records.read()
+#                     # Remove excluded fields from each record
+#                     for record in related_data:
+#                         for exclude_field in exclude_fields:
+#                             record.pop(exclude_field, None)
+#                     data[field] = related_data
+#                 elif isinstance(value, tuple) and value:
+#                     record = self.env[self.fields_get()[field]['relation']].browse(value[0])
+#                     if record:
+#                         related_data = record.read()[0]
+#                         # Remove excluded fields
+#                         for exclude_field in exclude_fields:
+#                             related_data.pop(exclude_field, None)
+#                         data[field] = related_data
+#                     else:
+#                         data[field] = None
+#                 elif isinstance(value, int):
+#                     record = self.env[self.fields_get()[field]['relation']].browse(value)
+#                     if record:
+#                         related_data = record.read()[0]
+#                         # Remove excluded fields
+#                         for exclude_field in exclude_fields:
+#                             related_data.pop(exclude_field, None)
+#                         data[field] = related_data
+#                     else:
+#                         data[field] = None
             
-            payload = {
-                "operation": 0,
-                "type": 0,
-                "model": self._name,
-                "ids": result.ids,
-                "data": data
-            }
+#             payload = {
+#                 "operation": 0,
+#                 "type": 0,
+#                 "model": self._name,
+#                 "ids": result.ids,
+#                 "data": data
+#             }
             
-            print("***************$$$$$$$$$**************")
-            print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
-            send_webhook(payload)
+#             print("***************$$$$$$$$$**************")
+#             print(json.dumps(sanitize(payload["data"]), indent=4, ensure_ascii=False))
+#             send_webhook(payload)
         
-        return result
+#         return result
 
-    def write(self, vals):
-        # Skip webhook if product is not available in POS or has no barcode
-        if not self.available_in_pos or not self.barcode:
-            return super().write(vals)
+#     def write(self, vals):
+#         # Skip webhook if product is not available in POS or has no barcode
+#         if not self.available_in_pos or not self.barcode:
+#             return super().write(vals)
         
-        # Skip webhook if product is updated by loyalty program
-        context_model = self._context.get('params', {}).get('model')
-        if (self._context.get('from_loyalty_program') or 
-            self._context.get('loyalty_program_id') or 
-            context_model == 'loyalty.program'):
-            return super().write(vals)
+#         # Skip webhook if product is updated by loyalty program
+#         context_model = self._context.get('params', {}).get('model')
+#         if (self._context.get('from_loyalty_program') or 
+#             self._context.get('loyalty_program_id') or 
+#             context_model == 'loyalty.program'):
+#             return super().write(vals)
         
-        price_fields = ['list_price', 'standard_price']
-        price_changed = any(field in vals for field in price_fields)
+#         price_fields = ['list_price', 'standard_price']
+#         price_changed = any(field in vals for field in price_fields)
         
-        if not price_changed:
-            return super().write(vals)
+#         if not price_changed:
+#             return super().write(vals)
         
-        result = super().write(vals)
+#         result = super().write(vals)
 
-        if self.product_variant_ids:
+#         if self.product_variant_ids:
             
-            if result: 
-                data = vals
+#             if result: 
+#                 data = vals
 
-                for key, value in data.items():
-                    if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
-                        data[key] = value.isoformat() if value else None
+#                 for key, value in data.items():
+#                     if isinstance(value, (fields.Datetime, fields.Date)) or hasattr(value, 'isoformat'):
+#                         data[key] = value.isoformat() if value else None
 
-                payload = {
-                    "operation": 1,
-                    "type": 0,
-                    "model": self._name,
-                    "ids": self.ids,
-                    "data": data
-                }
+#                 payload = {
+#                     "operation": 1,
+#                     "type": 0,
+#                     "model": self._name,
+#                     "ids": self.ids,
+#                     "data": data
+#                 }
                 
-                send_webhook(payload)
+#                 send_webhook(payload)
         
-        return result
+#         return result
 
-    def unlink(self):
-        # Skip webhook if product is not available in POS or has no barcode
-        if not self.available_in_pos or not self.barcode:
-            return super().unlink()
+#     def unlink(self):
+#         # Skip webhook if product is not available in POS or has no barcode
+#         if not self.available_in_pos or not self.barcode:
+#             return super().unlink()
         
-        # Skip webhook if product is deleted by loyalty program
-        context_model = self._context.get('params', {}).get('model')
-        if (self._context.get('from_loyalty_program') or 
-            self._context.get('loyalty_program_id') or 
-            context_model == 'loyalty.program'):
-            return super().unlink()
+#         # Skip webhook if product is deleted by loyalty program
+#         context_model = self._context.get('params', {}).get('model')
+#         if (self._context.get('from_loyalty_program') or 
+#             self._context.get('loyalty_program_id') or 
+#             context_model == 'loyalty.program'):
+#             return super().unlink()
         
-        product_variant_ids = self.product_variant_ids
-        ids = []
-        name = ''
-        if product_variant_ids:
-            ids = product_variant_ids.ids
-            name = product_variant_ids._name
+#         product_variant_ids = self.product_variant_ids
+#         ids = []
+#         name = ''
+#         if product_variant_ids:
+#             ids = product_variant_ids.ids
+#             name = product_variant_ids._name
         
-        result = super().unlink()
+#         result = super().unlink()
         
-        if result: 
-            payload = {
-                "operation": 2,
-                "type": 0,
-                "model": self._name,
-                "ids": self.ids
-            }
+#         if result: 
+#             payload = {
+#                 "operation": 2,
+#                 "type": 0,
+#                 "model": self._name,
+#                 "ids": self.ids
+#             }
             
-            send_webhook(payload)
+#             send_webhook(payload)
         
-        return result
+#         return result
 
 
 # class Product(models.Model):
@@ -611,61 +611,61 @@ class ProductTemplate(models.Model):
 #         return result
 
 # this is the LoyaltyProgram
-class LoyaltyProgram(models.Model):
-    _inherit = 'loyalty.program'
+# class LoyaltyProgram(models.Model):
+#     _inherit = 'loyalty.program'
 
-    write_date = fields.Datetime(
-        'Last Updated on',  index=True, help="Date on which the record was last updated.")
+#     write_date = fields.Datetime(
+#         'Last Updated on',  index=True, help="Date on which the record was last updated.")
 
-    @api.model
-    def create(self, vals):
-        result = super().create(vals)
+#     @api.model
+#     def create(self, vals):
+#         result = super().create(vals)
         
-        # Only send webhook if IDs exist and are not null
-        if result and result.ids:
-            payload = {
-                "operation": 0,
-                "type": 2,
-                "model": self._name,
-                "ids": result.ids,
-            }
+#         # Only send webhook if IDs exist and are not null
+#         if result and result.ids:
+#             payload = {
+#                 "operation": 0,
+#                 "type": 2,
+#                 "model": self._name,
+#                 "ids": result.ids,
+#             }
             
-            send_webhook(payload)
-        return result
+#             send_webhook(payload)
+#         return result
 
-    def write(self, vals):
-        result = super().write(vals)
+#     def write(self, vals):
+#         result = super().write(vals)
         
-        # Only send webhook if operation succeeded and IDs exist
-        if result and self.ids:
-            payload = {
-                "operation": 1,
-                "type": 2,
-                "model": self._name,
-                "ids": self.ids,
-            }
-            send_webhook(payload)
+#         # Only send webhook if operation succeeded and IDs exist
+#         if result and self.ids:
+#             payload = {
+#                 "operation": 1,
+#                 "type": 2,
+#                 "model": self._name,
+#                 "ids": self.ids,
+#             }
+#             send_webhook(payload)
         
-        return result
+#         return result
 
-    def unlink(self):
-        # Store IDs before deletion
-        ids_to_send = self.ids if self.ids else []
+#     def unlink(self):
+#         # Store IDs before deletion
+#         ids_to_send = self.ids if self.ids else []
         
-        result = super().unlink()
+#         result = super().unlink()
         
-        # Only send webhook if deletion succeeded and IDs existed
-        if result and ids_to_send:
-            payload = {
-                "operation": 2,
-                "type": 2,
-                "model": self._name,
-                "ids": ids_to_send
-            }
+#         # Only send webhook if deletion succeeded and IDs existed
+#         if result and ids_to_send:
+#             payload = {
+#                 "operation": 2,
+#                 "type": 2,
+#                 "model": self._name,
+#                 "ids": ids_to_send
+#             }
             
-            send_webhook(payload)
+#             send_webhook(payload)
         
-        return result
+#         return result
     
 
 # class LoyaltyRule(models.Model):
@@ -2326,14 +2326,13 @@ class PosSyncController(http.Controller):
                     pt.volume,
                     pt.weight,
                     pt.active,
-                    pt.barcode,
+                    pp.barcode,
                     pp.id AS product_id,
                     uom.id AS uom_id,
                     uom.name AS uom_name,
                     uom.uom_type,
                     uom.rounding AS uom_rounding,
                     uom.factor AS uom_factor,
-                    uom.factor_inv AS uom_factor_inv,
                     CASE 
                         WHEN pt.create_date > %s THEN 'created'
                         WHEN pt.write_date > %s AND pt.create_date <= %s THEN 'updated'
@@ -2342,8 +2341,8 @@ class PosSyncController(http.Controller):
                 LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
                 LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
                 WHERE pt.available_in_pos = TRUE 
-                AND pt.barcode IS NOT NULL
-                AND pt.barcode != ''
+                AND pp.barcode IS NOT NULL
+                AND pp.barcode != ''
                 AND (pt.create_date > %s OR pt.write_date > %s)
                 ORDER BY pt.id, pp.id
             """
@@ -2358,21 +2357,20 @@ class PosSyncController(http.Controller):
                     pt.volume,
                     pt.weight,
                     pt.active,
-                    pt.barcode,
+                    pp.barcode,
                     pp.id AS product_id,
                     uom.id AS uom_id,
                     uom.name AS uom_name,
                     uom.uom_type,
                     uom.rounding AS uom_rounding,
                     uom.factor AS uom_factor,
-                    uom.factor_inv AS uom_factor_inv,
                     'created' AS change_type
                 FROM product_template pt
                 LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
                 LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
                 WHERE pt.available_in_pos = TRUE 
-                AND pt.barcode IS NOT NULL
-                AND pt.barcode != ''
+                AND pp.barcode IS NOT NULL
+                AND pp.barcode != ''
                 ORDER BY pt.id, pp.id
             """
             request.env.cr.execute(query)
@@ -2393,7 +2391,6 @@ class PosSyncController(http.Controller):
                     'uom_type': row['uom_type'],
                     'rounding': float(row['uom_rounding']) if row['uom_rounding'] else None,
                     'factor': float(row['uom_factor']) if row['uom_factor'] else None,
-                    'factor_inv': float(row['uom_factor_inv']) if row['uom_factor_inv'] else None,
                 }
             
             # Build product data in the same format as original webhook
@@ -2449,7 +2446,354 @@ class PosSyncController(http.Controller):
             headers=[('Content-Type', 'application/json')],
             status=200
         )        
-            
+
+    @http.route('/api/sync/loyalty', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_loyalty_sync(self, **kwargs):
+        """
+        Get all loyalty programs changed since last sync.
+        Returns created, updated, and deleted loyalty programs.
+        
+        Request:
+        GET /api/sync/loyalty
+        Headers: Authorization: your-token
+        
+        Response:
+        {
+            "success": true,
+            "last_sync_time": "2024-01-01T00:00:00",
+            "current_sync_time": "2024-01-02T00:00:00",
+            "changes": {
+                "created": [...],
+                "updated": [...],
+                "deleted": []
+            },
+            "summary": {
+                "total_changes": 10,
+                "created_count": 5,
+                "updated_count": 5,
+                "deleted_count": 0
+            }
+        }
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+
+        try:
+            # Get sync tracker
+            sync_record = request.env['sync.update'].sudo().get_sync_record()
+            last_sync = sync_record.last_loyalty_sync
+            current_time = datetime.utcnow()
+
+            # Build the query
+            if last_sync:
+                # Get loyalty programs changed since last sync
+                query = """
+                    SELECT
+                        lp.id AS program_id,
+                        COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
+                        lp.create_date AS program_create_date,
+                        lp.write_date AS program_write_date,
+                        lr.id AS rule_id,
+                        lr.mode AS rule_mode,
+                        lr.active AS rule_active,
+                        lr.code AS discount_code,
+                        lr.minimum_qty AS rule_min_qty,
+                        lr.minimum_amount AS rule_min_amount,
+                        lr.create_date AS rule_create_date,
+                        lr.write_date AS rule_write_date,
+
+                        lp.product_id AS lp_product_id,
+
+                        -- MAIN PRODUCT (fallback to eligible product when missing)
+                        COALESCE(pp_main.id, pp_eligible.id, 0) AS main_product_id,
+                        COALESCE(pp_main.product_tmpl_id, pp_eligible.product_tmpl_id, 0) AS main_product_tmpl_id,
+                        COALESCE(
+                            pt_main.name->>'ar_001',
+                            pt_main.name->>'en_US',
+                            pt_eligible.name->>'ar_001',
+                            pt_eligible.name->>'en_US',
+                            'NO MAIN PRODUCT'
+                        ) AS main_product_name,
+                        COALESCE(pp_main.barcode, pp_eligible.barcode, 'N/A') AS main_product_barcode,
+                        COALESCE(pt_main.list_price, pt_eligible.list_price, 0) AS main_product_list_price,
+                        COALESCE(pt_main.id, pt_eligible.id, 0) AS p_id,
+
+                        -- Eligible Product (normal)
+                        pp_eligible.id AS eligible_product_id,
+                        COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
+                        pp_eligible.barcode AS eligible_product_barcode,
+                        pt_eligible.list_price AS eligible_product_list_price,
+
+                        -- Reward Product
+                        pp_reward.id AS reward_product_id,
+                        COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
+                        pp_reward.barcode AS reward_product_barcode,
+                        pt_reward.list_price AS reward_product_list_price,
+
+                        lrp.product_product_id AS eligible_relation_id,
+                        lr.total_price AS rule_total_price,
+                        lr.after_dis AS rule_after_discount,
+                        lr.discount AS rule_discount,
+
+                        CASE 
+                            WHEN lp.product_id IS NULL THEN 'FALLBACK TO ELIGIBLE'
+                            ELSE 'MAIN PRODUCT OK'
+                        END AS main_product_status,
+
+                        -- Determine change type based on program or rule changes
+                        CASE 
+                            WHEN lp.create_date > %s OR lr.create_date > %s THEN 'created'
+                            WHEN (lp.write_date > %s AND lp.create_date <= %s) 
+                                OR (lr.write_date > %s AND lr.create_date <= %s) THEN 'updated'
+                        END AS change_type
+
+                    FROM loyalty_program lp
+                    LEFT JOIN loyalty_rule lr
+                        ON lr.program_id = lp.id
+
+                    -- Main product joins
+                    LEFT JOIN product_product pp_main
+                        ON pp_main.id = lp.product_id
+                    LEFT JOIN product_template pt_main
+                        ON pt_main.id = pp_main.product_tmpl_id
+
+                    -- Eligible products
+                    LEFT JOIN loyalty_rule_product_product_rel lrp
+                        ON lrp.loyalty_rule_id = lr.id
+                    LEFT JOIN product_product pp_eligible
+                        ON pp_eligible.id = lrp.product_product_id
+                    LEFT JOIN product_template pt_eligible
+                        ON pt_eligible.id = pp_eligible.product_tmpl_id
+
+                    -- Reward products
+                    LEFT JOIN loyalty_reward lrw
+                        ON lrw.program_id = lp.id
+                    LEFT JOIN product_product pp_reward
+                        ON pp_reward.id = lrw.reward_product_id
+                    LEFT JOIN product_template pt_reward
+                        ON pt_reward.id = pp_reward.product_tmpl_id
+
+                    WHERE lr.active = TRUE
+                    AND (
+                        lp.create_date > %s 
+                        OR lp.write_date > %s
+                        OR lr.create_date > %s
+                        OR lr.write_date > %s
+                    )
+                    ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
+                """
+                request.env.cr.execute(query, (
+                    last_sync, last_sync,  # For CASE created
+                    last_sync, last_sync, last_sync, last_sync,  # For CASE updated
+                    last_sync, last_sync, last_sync, last_sync  # For WHERE clause
+                ))
+            else:
+                # First sync - get all loyalty programs
+                query = """
+                    SELECT
+                        lp.id AS program_id,
+                        COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
+                        lp.create_date AS program_create_date,
+                        lp.write_date AS program_write_date,
+                        lr.id AS rule_id,
+                        lr.mode AS rule_mode,
+                        lr.active AS rule_active,
+                        lr.code AS discount_code,
+                        lr.minimum_qty AS rule_min_qty,
+                        lr.minimum_amount AS rule_min_amount,
+                        lr.create_date AS rule_create_date,
+                        lr.write_date AS rule_write_date,
+
+                        lp.product_id AS lp_product_id,
+
+                        -- MAIN PRODUCT (fallback to eligible product when missing)
+                        COALESCE(pp_main.id, pp_eligible.id, 0) AS main_product_id,
+                        COALESCE(pp_main.product_tmpl_id, pp_eligible.product_tmpl_id, 0) AS main_product_tmpl_id,
+                        COALESCE(
+                            pt_main.name->>'ar_001',
+                            pt_main.name->>'en_US',
+                            pt_eligible.name->>'ar_001',
+                            pt_eligible.name->>'en_US',
+                            'NO MAIN PRODUCT'
+                        ) AS main_product_name,
+                        COALESCE(pp_main.barcode, pp_eligible.barcode, 'N/A') AS main_product_barcode,
+                        COALESCE(pt_main.list_price, pt_eligible.list_price, 0) AS main_product_list_price,
+                        COALESCE(pt_main.id, pt_eligible.id, 0) AS p_id,
+
+                        -- Eligible Product (normal)
+                        pp_eligible.id AS eligible_product_id,
+                        COALESCE(pt_eligible.name->>'ar_001', pt_eligible.name->>'en_US', '') AS eligible_product_name,
+                        pp_eligible.barcode AS eligible_product_barcode,
+                        pt_eligible.list_price AS eligible_product_list_price,
+
+                        -- Reward Product
+                        pp_reward.id AS reward_product_id,
+                        COALESCE(pt_reward.name->>'ar_001', pt_reward.name->>'en_US', '') AS reward_product_name,
+                        pp_reward.barcode AS reward_product_barcode,
+                        pt_reward.list_price AS reward_product_list_price,
+
+                        lrp.product_product_id AS eligible_relation_id,
+                        lr.total_price AS rule_total_price,
+                        lr.after_dis AS rule_after_discount,
+                        lr.discount AS rule_discount,
+
+                        CASE 
+                            WHEN lp.product_id IS NULL THEN 'FALLBACK TO ELIGIBLE'
+                            ELSE 'MAIN PRODUCT OK'
+                        END AS main_product_status,
+
+                        'created' AS change_type
+
+                    FROM loyalty_program lp
+                    LEFT JOIN loyalty_rule lr
+                        ON lr.program_id = lp.id
+
+                    -- Main product joins
+                    LEFT JOIN product_product pp_main
+                        ON pp_main.id = lp.product_id
+                    LEFT JOIN product_template pt_main
+                        ON pt_main.id = pp_main.product_tmpl_id
+
+                    -- Eligible products
+                    LEFT JOIN loyalty_rule_product_product_rel lrp
+                        ON lrp.loyalty_rule_id = lr.id
+                    LEFT JOIN product_product pp_eligible
+                        ON pp_eligible.id = lrp.product_product_id
+                    LEFT JOIN product_template pt_eligible
+                        ON pt_eligible.id = pp_eligible.product_tmpl_id
+
+                    -- Reward products
+                    LEFT JOIN loyalty_reward lrw
+                        ON lrw.program_id = lp.id
+                    LEFT JOIN product_product pp_reward
+                        ON pp_reward.id = lrw.reward_product_id
+                    LEFT JOIN product_template pt_reward
+                        ON pt_reward.id = pp_reward.product_tmpl_id
+
+                    WHERE lr.active = TRUE
+                    ORDER BY lp.id, lr.id, pp_eligible.id, pp_reward.id;
+                """
+                request.env.cr.execute(query)
+
+            raw_results = request.env.cr.dictfetchall()
+
+            # Format results
+            created = []
+            updated = []
+
+            for row in raw_results:
+                # Build main product data
+                main_product_data = {
+                    'id': row['main_product_id'],
+                    'template_id': row['main_product_tmpl_id'],
+                    'name': row['main_product_name'],
+                    'barcode': row['main_product_barcode'],
+                    'list_price': float(row['main_product_list_price']) if row['main_product_list_price'] else 0.0,
+                    'status': row['main_product_status'],
+                }
+
+                # Build eligible product data
+                eligible_product_data = None
+                if row.get('eligible_product_id'):
+                    eligible_product_data = {
+                        'id': row['eligible_product_id'],
+                        'name': row['eligible_product_name'],
+                        'barcode': row['eligible_product_barcode'],
+                        'list_price': float(row['eligible_product_list_price']) if row['eligible_product_list_price'] else 0.0,
+                    }
+
+                # Build reward product data
+                reward_product_data = None
+                if row.get('reward_product_id'):
+                    reward_product_data = {
+                        'id': row['reward_product_id'],
+                        'name': row['reward_product_name'],
+                        'barcode': row['reward_product_barcode'],
+                        'list_price': float(row['reward_product_list_price']) if row['reward_product_list_price'] else 0.0,
+                    }
+
+                # Build rule data
+                rule_data = None
+                if row.get('rule_id'):
+                    rule_data = {
+                        'id': row['rule_id'],
+                        'mode': row['rule_mode'],
+                        'active': row['rule_active'],
+                        'discount_code': row['discount_code'],
+                        'minimum_qty': float(row['rule_min_qty']) if row['rule_min_qty'] else 0.0,
+                        'minimum_amount': float(row['rule_min_amount']) if row['rule_min_amount'] else 0.0,
+                        'total_price': float(row['rule_total_price']) if row['rule_total_price'] else 0.0,
+                        'after_discount': float(row['rule_after_discount']) if row['rule_after_discount'] else 0.0,
+                        'discount': float(row['rule_discount']) if row['rule_discount'] else 0.0,
+                    }
+
+                # Build loyalty program data
+                data = {
+                    'program_id': row['program_id'],
+                    'program_name': row['program_name'],
+                    'main_product': main_product_data,
+                    'eligible_product': eligible_product_data,
+                    'reward_product': reward_product_data,
+                    'rule': rule_data,
+                }
+
+                payload = {
+                    'operation': 0 if row['change_type'] == 'created' else 1,
+                    'type': 1,  # Type 1 for loyalty
+                    'model': 'loyalty.program',
+                    'ids': [row['program_id']],
+                    'data': data
+                }
+
+                if row['change_type'] == 'created':
+                    created.append(payload)
+                else:
+                    updated.append(payload)
+
+            # Update last sync time
+            sync_record.sudo().write({'last_loyalty_sync': current_time})
+
+            # Build response
+            response = {
+                'success': True,
+                'last_sync_time': last_sync.isoformat() if last_sync else None,
+                'current_sync_time': current_time.isoformat(),
+                'changes': {
+                    'created': created,
+                    'updated': updated,
+                    'deleted': []  # Would need separate tracking for deleted records
+                },
+                'summary': {
+                    'total_changes': len(created) + len(updated),
+                    'created_count': len(created),
+                    'updated_count': len(updated),
+                    'deleted_count': 0
+                }
+            }
+
+            return request.make_response(
+                json.dumps(response, default=str, ensure_ascii=False),
+                headers=[('Content-Type', 'application/json')],
+                status=200
+            )
+
+        except Exception as e:
+            _logger.exception("Failed to fetch loyalty sync data")
+            return request.make_response(
+                json.dumps({'error': str(e), 'success': False}),
+                headers=[('Content-Type', 'application/json')],
+                status=500
+            )
+
+
     @http.route('/api/loyalty/programs', type='json', auth='public', methods=['GET'])
     def get_loyalty_programs(self, **kwargs):
         """
@@ -2723,7 +3067,9 @@ class PosSyncController(http.Controller):
             return {
                 'status': 'error',
                 'message': str(e)
-            }    
+            }  
+
+
         
 
 
@@ -2930,6 +3276,334 @@ class PurchaseOrder(models.Model):
 
 class PurchaseOrderReceivingController(http.Controller):
     """Controller for receiving purchase order items via API"""
+
+
+    @http.route('/api/sync/purchase-order', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_purchase_order_sync(self, **kwargs):
+        """
+        Get all purchase orders changed since last sync.
+        Returns created, updated, and deleted purchase orders.
+        Only returns orders from the configured App warehouse.
+        
+        Request:
+        GET /api/sync/purchase-order
+        Headers: Authorization: your-token
+        
+        Response:
+        {
+            "success": true,
+            "last_sync_time": "2024-01-01T00:00:00",
+            "current_sync_time": "2024-01-02T00:00:00",
+            "changes": {
+                "created": [...],
+                "updated": [...],
+                "deleted": []
+            },
+            "summary": {
+                "total_changes": 10,
+                "created_count": 5,
+                "updated_count": 5,
+                "deleted_count": 0
+            }
+        }
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+
+        try:
+            # Get sync config for warehouse filter
+            config = request.env['sync.app.config'].sudo().search([], limit=1)
+            if not config:
+                return request.make_response(
+                    json.dumps({'error': 'Sync App not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            app_warehouse = config.app_warehouse_id
+            if not app_warehouse:
+                return request.make_response(
+                    json.dumps({'error': 'App warehouse not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            warehouse_id = app_warehouse.id
+
+            # Get sync tracker
+            sync_record = request.env['sync.update'].sudo().get_sync_record()
+            last_sync = sync_record.last_receipt_sync
+            current_time = datetime.utcnow()
+
+            # Build the query
+            if last_sync:
+                # Get purchase orders changed since last sync
+                query = """
+                    SELECT
+                        po.id AS order_id,
+                        po.name AS order_name,
+                        po.state AS order_state,
+                        po.date_order,
+                        po.date_planned,
+                        po.amount_untaxed,
+                        po.amount_tax,
+                        po.amount_total,
+                        po.notes,
+                        po.create_date AS order_create_date,
+                        po.write_date AS order_write_date,
+                        
+                        -- Currency
+                        cur.id AS currency_id,
+                        cur.name AS currency_name,
+                        
+                        -- Partner
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        rp.vat AS partner_vat,
+                        
+                        -- Picking Type
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Order Line
+                        pol.id AS line_id,
+                        pol.product_qty,
+                        pol.qty_received,
+                        pol.price_unit,
+                        pol.price_subtotal,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        -- Change type
+                        CASE 
+                            WHEN po.create_date > %s THEN 'created'
+                            WHEN po.write_date > %s AND po.create_date <= %s THEN 'updated'
+                        END AS change_type
+
+                    FROM purchase_order po
+                    LEFT JOIN res_currency cur ON cur.id = po.currency_id
+                    LEFT JOIN res_partner rp ON rp.id = po.partner_id
+                    LEFT JOIN stock_picking_type spt ON spt.id = po.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN purchase_order_line pol ON pol.order_id = po.id
+                    LEFT JOIN product_product pp ON pp.id = pol.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = pol.product_uom
+
+                    WHERE sw.id = %s
+                    AND po.state IN ('purchase', 'done')
+                    AND (po.create_date > %s OR po.write_date > %s)
+                    ORDER BY po.id, pol.id;
+                """
+                request.env.cr.execute(query, (
+                    last_sync, last_sync, last_sync,  # For CASE
+                    warehouse_id,  # For WHERE warehouse filter
+                    last_sync, last_sync  # For WHERE date filter
+                ))
+            else:
+                # First sync - get all purchase orders from configured warehouse
+                query = """
+                    SELECT
+                        po.id AS order_id,
+                        po.name AS order_name,
+                        po.state AS order_state,
+                        po.date_order,
+                        po.date_planned,
+                        po.amount_untaxed,
+                        po.amount_tax,
+                        po.amount_total,
+                        po.notes,
+                        po.create_date AS order_create_date,
+                        po.write_date AS order_write_date,
+                        
+                        -- Currency
+                        cur.id AS currency_id,
+                        cur.name AS currency_name,
+                        
+                        -- Partner
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        rp.vat AS partner_vat,
+                        
+                        -- Picking Type
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Order Line
+                        pol.id AS line_id,
+                        pol.product_qty,
+                        pol.qty_received,
+                        pol.price_unit,
+                        pol.price_subtotal,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        'created' AS change_type
+
+                    FROM purchase_order po
+                    LEFT JOIN res_currency cur ON cur.id = po.currency_id
+                    LEFT JOIN res_partner rp ON rp.id = po.partner_id
+                    LEFT JOIN stock_picking_type spt ON spt.id = po.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN purchase_order_line pol ON pol.order_id = po.id
+                    LEFT JOIN product_product pp ON pp.id = pol.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = pol.product_uom
+
+                    WHERE sw.id = %s
+                    AND po.state IN ('purchase', 'done')
+                    ORDER BY po.id, pol.id;
+                """
+                request.env.cr.execute(query, (warehouse_id,))
+
+            raw_results = request.env.cr.dictfetchall()
+
+            # Group results by order_id (since we have multiple lines per order)
+            orders_dict = {}
+            for row in raw_results:
+                order_id = row['order_id']
+                
+                if order_id not in orders_dict:
+                    # Initialize order data
+                    orders_dict[order_id] = {
+                        'order_id': order_id,
+                        'order_name': row['order_name'],
+                        'order_state': row['order_state'],
+                        'date_order': row['date_order'].isoformat() if row['date_order'] else None,
+                        'date_planned': row['date_planned'].isoformat() if row['date_planned'] else None,
+                        'amount_untaxed': float(row['amount_untaxed']) if row['amount_untaxed'] else 0.0,
+                        'amount_tax': float(row['amount_tax']) if row['amount_tax'] else 0.0,
+                        'amount_total': float(row['amount_total']) if row['amount_total'] else 0.0,
+                        'notes': row['notes'] or '',
+                        'currency': {
+                            'id': row['currency_id'],
+                            'name': row['currency_name'],
+                        },
+                        'partner': {
+                            'id': row['partner_id'],
+                            'name': row['partner_name'],
+                            'phone': row['partner_phone'],
+                            'email': row['partner_email'],
+                            'vat': row['partner_vat'],
+                        },
+                        'picking_type': {
+                            'id': row['picking_type_id'],
+                            'name': row['picking_type_name'],
+                            'warehouse_id': row['warehouse_id'],
+                            'warehouse_name': row['warehouse_name'],
+                        },
+                        'order_lines': [],
+                        'change_type': row['change_type'],
+                    }
+                
+                # Add order line if exists
+                if row.get('line_id'):
+                    line_data = {
+                        'id': row['line_id'],
+                        'product_id': row['product_id'],
+                        'product_name': row['product_name'],
+                        'product_barcode': row['product_barcode'],
+                        'product_code': row['product_code'],
+                        'quantity': float(row['product_qty']) if row['product_qty'] else 0.0,
+                        'qty_received': float(row['qty_received']) if row['qty_received'] else 0.0,
+                        'qty_to_receive': float(row['product_qty'] - row['qty_received']) if row['product_qty'] and row['qty_received'] else 0.0,
+                        'price_unit': float(row['price_unit']) if row['price_unit'] else 0.0,
+                        'price_subtotal': float(row['price_subtotal']) if row['price_subtotal'] else 0.0,
+                        'uom_id': row['uom_id'],
+                        'uom_name': row['uom_name'],
+                    }
+                    orders_dict[order_id]['order_lines'].append(line_data)
+
+            # Format results into created/updated lists
+            created = []
+            updated = []
+
+            for order_id, order_data in orders_dict.items():
+                change_type = order_data.pop('change_type')  # Remove from data
+                
+                payload = {
+                    'operation': 6 if change_type == 'created' else 7,  # 6 = created, 7 = updated
+                    'type': 5,  # Purchase Order type
+                    'model': 'purchase.order',
+                    'ids': [order_id],
+                    'data': order_data
+                }
+
+                if change_type == 'created':
+                    created.append(payload)
+                else:
+                    updated.append(payload)
+
+            # Update last sync time
+            sync_record.sudo().write({'last_receipt_sync': current_time})
+
+            # Build response
+            response = {
+                'success': True,
+                'warehouse': {
+                    'id': warehouse_id,
+                    'name': app_warehouse.name,
+                },
+                'last_sync_time': last_sync.isoformat() if last_sync else None,
+                'current_sync_time': current_time.isoformat(),
+                'changes': {
+                    'created': created,
+                    'updated': updated,
+                    'deleted': []  # Would need separate tracking for deleted records
+                },
+                'summary': {
+                    'total_changes': len(created) + len(updated),
+                    'created_count': len(created),
+                    'updated_count': len(updated),
+                    'deleted_count': 0
+                }
+            }
+
+            return request.make_response(
+                json.dumps(response, default=str, ensure_ascii=False),
+                headers=[('Content-Type', 'application/json')],
+                status=200
+            )
+
+        except Exception as e:
+            _logger.exception("Failed to fetch purchase order sync data")
+            return request.make_response(
+                json.dumps({'error': str(e), 'success': False}),
+                headers=[('Content-Type', 'application/json')],
+                status=500
+            )
 
     @http.route('/api/purchase/receive', type='json', auth='public', methods=['POST'])
     def receive_purchase_order(self):
@@ -3154,128 +3828,402 @@ class PurchaseOrderReceivingController(http.Controller):
 
 
 
-class StockPicking(models.Model):
-    _inherit = 'stock.picking'
+# class StockPicking(models.Model):
+#     _inherit = 'stock.picking'
 
-    @api.model
-    def create(self, vals):
-        """Override create to send webhook when receipt is created for App warehouse"""
-        result = super().create(vals)
+#     @api.model
+#     def create(self, vals):
+#         """Override create to send webhook when receipt is created for App warehouse"""
+#         result = super().create(vals)
 
-        config = get_sync_config()
-        if not config:
-            return {'status': 'error', 'message': 'Sync App not configured'}
+#         config = get_sync_config()
+#         if not config:
+#             return {'status': 'error', 'message': 'Sync App not configured'}
 
-        # The warehouse is already a record in config, no need to search again!
-        app_warehouse = config.app_warehouse_id
-        if not app_warehouse:
-            return {'status': 'error', 'message': 'App warehouse not configured'}
+#         # The warehouse is already a record in config, no need to search again!
+#         app_warehouse = config.app_warehouse_id
+#         if not app_warehouse:
+#             return {'status': 'error', 'message': 'App warehouse not configured'}
 
-        # Now use it directly
-        warehouse_id = app_warehouse.id          # Get the ID
-        warehouse_name = app_warehouse.name      # Get the name
+#         # Now use it directly
+#         warehouse_id = app_warehouse.id          # Get the ID
+#         warehouse_name = app_warehouse.name      # Get the name
         
-        for picking in result:
-            if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
-                warehouse = picking.picking_type_id.warehouse_id
-                if warehouse and warehouse.id == warehouse_id:
-                    print("***************$$$$ STOCK RECEIPT CREATED FOR APP $$$$**************")
-                    self._send_receipt_webhook(picking, operation=0)
+#         for picking in result:
+#             if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
+#                 warehouse = picking.picking_type_id.warehouse_id
+#                 if warehouse and warehouse.id == warehouse_id:
+#                     print("***************$$$$ STOCK RECEIPT CREATED FOR APP $$$$**************")
+#                     self._send_receipt_webhook(picking, operation=0)
         
-        return result
+#         return result
 
-    # def write(self, vals):
-    #     """Override write to send webhook when receipt is updated"""
-    #     result = super().write(vals)
+
+#     def _send_receipt_webhook(self, picking, operation=0):
+#         """Send receipt details to webhook"""
         
-    #     for picking in self:
-    #         if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
-    #             warehouse = picking.picking_type_id.warehouse_id
-    #             if warehouse and warehouse.name == 'App':
-    #                 if 'state' in vals or 'move_ids' in vals or 'move_line_ids' in vals:
-    #                     print("***************$$$$ STOCK RECEIPT UPDATED FOR APP $$$$**************")
-    #                     self._send_receipt_webhook(picking, operation=1)
-        
-    #     return result
+#         move_lines = []
+#         for move in picking.move_ids:
+#             move_data = {
+#                 'id': move.id,
+#                 'product_id': move.product_id.id,
+#                 'product_name': move.product_id.name,
+#                 'product_barcode': move.product_id.barcode,
+#                 'product_code': move.product_id.default_code,
+#                 'quantity_ordered': move.product_uom_qty,
+#                 'quantity_done': move.quantity_done,
+#                 'quantity_remaining': move.product_uom_qty - move.quantity_done,
+#                 'uom_id': move.product_uom.id,
+#                 'uom_name': move.product_uom.name,
+#                 'state': move.state,
+#                 'purchase_line_id': move.purchase_line_id.id if move.purchase_line_id else None,
+#             }
+#             move_lines.append(move_data)
 
-    # def button_validate(self):
-    #     """Override validate to send webhook when receipt is validated"""
-    #     result = super().button_validate()
-        
-    #     for picking in self:
-    #         if picking.picking_type_id and picking.picking_type_id.code == 'incoming':
-    #             warehouse = picking.picking_type_id.warehouse_id
-    #             if warehouse and warehouse.name == 'App':
-    #                 print("***************$$$$ STOCK RECEIPT VALIDATED FOR APP $$$$**************")
-    #                 self._send_receipt_webhook(picking, operation=3)
-        
-    #     return result
+#         partner_data = None
+#         if picking.partner_id:
+#             partner_data = {
+#                 'id': picking.partner_id.id,
+#                 'name': picking.partner_id.name,
+#                 'phone': picking.partner_id.phone,
+#                 'email': picking.partner_id.email,
+#             }
 
-    def _send_receipt_webhook(self, picking, operation=0):
-        """Send receipt details to webhook"""
-        
-        move_lines = []
-        for move in picking.move_ids:
-            move_data = {
-                'id': move.id,
-                'product_id': move.product_id.id,
-                'product_name': move.product_id.name,
-                'product_barcode': move.product_id.barcode,
-                'product_code': move.product_id.default_code,
-                'quantity_ordered': move.product_uom_qty,
-                'quantity_done': move.quantity_done,
-                'quantity_remaining': move.product_uom_qty - move.quantity_done,
-                'uom_id': move.product_uom.id,
-                'uom_name': move.product_uom.name,
-                'state': move.state,
-                'purchase_line_id': move.purchase_line_id.id if move.purchase_line_id else None,
-            }
-            move_lines.append(move_data)
+#         picking_data = {
+#             'id': picking.id,
+#             'name': picking.name,
+#             'state': picking.state,
+#             'origin': picking.origin,
+#             'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+#             'date_done': picking.date_done.isoformat() if picking.date_done else None,
+#             'create_date': picking.create_date.isoformat() if picking.create_date else None,
+#             'partner': partner_data,
+#             'warehouse_id': picking.picking_type_id.warehouse_id.id if picking.picking_type_id.warehouse_id else None,
+#             'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
+#             'picking_type_name': picking.picking_type_id.name,
+#             'purchase_order_id': picking.purchase_id.id if picking.purchase_id else None,
+#             'purchase_order_name': picking.purchase_id.name if picking.purchase_id else None,
+#             'move_lines': move_lines,
+#         }
 
-        partner_data = None
-        if picking.partner_id:
-            partner_data = {
-                'id': picking.partner_id.id,
-                'name': picking.partner_id.name,
-                'phone': picking.partner_id.phone,
-                'email': picking.partner_id.email,
-            }
+#         payload = {
+#             "operation": operation,  # 0=create, 1=update, 3=validated
+#             "type": 7,  # Stock Picking/Receipt type
+#             "model": self._name,
+#             "ids": [picking.id],
+#             "data": picking_data
+#         }
 
-        picking_data = {
-            'id': picking.id,
-            'name': picking.name,
-            'state': picking.state,
-            'origin': picking.origin,
-            'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
-            'date_done': picking.date_done.isoformat() if picking.date_done else None,
-            'create_date': picking.create_date.isoformat() if picking.create_date else None,
-            'partner': partner_data,
-            'warehouse_id': picking.picking_type_id.warehouse_id.id if picking.picking_type_id.warehouse_id else None,
-            'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
-            'picking_type_name': picking.picking_type_id.name,
-            'purchase_order_id': picking.purchase_id.id if picking.purchase_id else None,
-            'purchase_order_name': picking.purchase_id.name if picking.purchase_id else None,
-            'move_lines': move_lines,
-        }
+#         print("***************$$$$$ STOCK RECEIPT WEBHOOK $$$$$**************")
+#         print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
 
-        payload = {
-            "operation": operation,  # 0=create, 1=update, 3=validated
-            "type": 7,  # Stock Picking/Receipt type
-            "model": self._name,
-            "ids": [picking.id],
-            "data": picking_data
-        }
-
-        print("***************$$$$$ STOCK RECEIPT WEBHOOK $$$$$**************")
-        print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
-
-        send_webhook(payload)
+#         send_webhook(payload)
 
 
 
 
 
 class StockReceivingController(http.Controller):
+
+    @http.route('/api/sync/receipt', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_receipt_sync(self, **kwargs):
+        """
+        Get all incoming stock receipts to App warehouse changed since last sync.
+        Returns created, updated, and validated receipts.
+        
+        Request:
+        GET /api/sync/receipt
+        Headers: Authorization: your-token
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+
+        try:
+            # Get sync config for warehouse filter
+            config = request.env['sync.app.config'].sudo().search([], limit=1)
+            if not config:
+                return request.make_response(
+                    json.dumps({'error': 'Sync App not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            app_warehouse = config.app_warehouse_id
+            if not app_warehouse:
+                return request.make_response(
+                    json.dumps({'error': 'App warehouse not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            warehouse_id = app_warehouse.id
+
+            # Get sync tracker
+            sync_record = request.env['sync.update'].sudo().get_sync_record()
+            last_sync = sync_record.last_receipt_sync
+            current_time = datetime.utcnow()
+
+            # Build the query
+            if last_sync:
+                query = """
+                    SELECT
+                        sp.id AS picking_id,
+                        sp.name AS picking_name,
+                        sp.state AS picking_state,
+                        sp.origin,
+                        sp.scheduled_date,
+                        sp.date_done,
+                        sp.create_date AS picking_create_date,
+                        sp.write_date AS picking_write_date,
+                        
+                        -- Picking Type & Warehouse
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Partner
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        
+                        -- Stock Move
+                        sm.id AS move_id,
+                        sm.product_uom_qty AS quantity_ordered,
+                        sm.quantity_done,
+                        sm.state AS move_state,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        -- Change type
+                        CASE 
+                            WHEN sp.create_date > %s THEN 'created'
+                            WHEN sp.state = 'done' AND sp.date_done > %s THEN 'validated'
+                            WHEN sp.write_date > %s AND sp.create_date <= %s THEN 'updated'
+                        END AS change_type
+
+                    FROM stock_picking sp
+                    LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+                    LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+                    LEFT JOIN product_product pp ON pp.id = sm.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+
+                    WHERE sw.id = %s
+                    AND spt.code = 'incoming'
+                    AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
+                    ORDER BY sp.id, sm.id;
+                """
+                request.env.cr.execute(query, (
+                    last_sync,  # created
+                    last_sync,  # validated
+                    last_sync, last_sync,  # updated
+                    warehouse_id,  # warehouse filter
+                    last_sync, last_sync, last_sync  # date filter
+                ))
+            else:
+                # First sync - get all incoming receipts
+                query = """
+                    SELECT
+                        sp.id AS picking_id,
+                        sp.name AS picking_name,
+                        sp.state AS picking_state,
+                        sp.origin,
+                        sp.scheduled_date,
+                        sp.date_done,
+                        sp.create_date AS picking_create_date,
+                        sp.write_date AS picking_write_date,
+                        
+                        -- Picking Type & Warehouse
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Partner
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        
+                        -- Stock Move
+                        sm.id AS move_id,
+                        sm.product_uom_qty AS quantity_ordered,
+                        sm.quantity_done,
+                        sm.state AS move_state,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        'created' AS change_type
+
+                    FROM stock_picking sp
+                    LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+                    LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+                    LEFT JOIN product_product pp ON pp.id = sm.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+
+                    WHERE sw.id = %s
+                    AND spt.code = 'incoming'
+                    ORDER BY sp.id, sm.id;
+                """
+                request.env.cr.execute(query, (warehouse_id,))
+
+            raw_results = request.env.cr.dictfetchall()
+
+            # Group results by picking_id
+            pickings_dict = {}
+            for row in raw_results:
+                picking_id = row['picking_id']
+                
+                if picking_id not in pickings_dict:
+                    # Partner data
+                    partner_data = None
+                    if row.get('partner_id'):
+                        partner_data = {
+                            'id': row['partner_id'],
+                            'name': row['partner_name'],
+                            'phone': row['partner_phone'],
+                            'email': row['partner_email'],
+                        }
+                    
+                    # Initialize picking data
+                    pickings_dict[picking_id] = {
+                        'id': picking_id,
+                        'name': row['picking_name'],
+                        'state': row['picking_state'],
+                        'origin': row['origin'],
+                        'scheduled_date': row['scheduled_date'].isoformat() if row['scheduled_date'] else None,
+                        'date_done': row['date_done'].isoformat() if row['date_done'] else None,
+                        'create_date': row['picking_create_date'].isoformat() if row['picking_create_date'] else None,
+                        'partner': partner_data,
+                        'warehouse_id': row['warehouse_id'],
+                        'warehouse_name': row['warehouse_name'],
+                        'picking_type_name': row['picking_type_name'],
+                        'move_lines': [],
+                        'change_type': row['change_type'],
+                    }
+                
+                # Add move line
+                if row.get('move_id'):
+                    quantity_ordered = float(row['quantity_ordered']) if row['quantity_ordered'] else 0.0
+                    quantity_done = float(row['quantity_done']) if row['quantity_done'] else 0.0
+                    
+                    move_data = {
+                        'id': row['move_id'],
+                        'product_id': row['product_id'],
+                        'product_name': row['product_name'],
+                        'product_barcode': row['product_barcode'],
+                        'product_code': row['product_code'],
+                        'quantity_ordered': quantity_ordered,
+                        'quantity_done': quantity_done,
+                        'quantity_remaining': quantity_ordered - quantity_done,
+                        'uom_id': row['uom_id'],
+                        'uom_name': row['uom_name'],
+                        'state': row['move_state'],
+                    }
+                    pickings_dict[picking_id]['move_lines'].append(move_data)
+
+            # Format results
+            created = []
+            updated = []
+            validated = []
+
+            for picking_id, picking_data in pickings_dict.items():
+                change_type = picking_data.pop('change_type')
+                
+                # Operation codes
+                if change_type == 'created':
+                    operation = 0
+                elif change_type == 'validated':
+                    operation = 3
+                else:
+                    operation = 1
+                
+                payload = {
+                    'operation': operation,
+                    'type': 7,
+                    'model': 'stock.picking',
+                    'ids': [picking_id],
+                    'data': picking_data
+                }
+
+                if change_type == 'created':
+                    created.append(payload)
+                elif change_type == 'validated':
+                    validated.append(payload)
+                else:
+                    updated.append(payload)
+
+            # Update last sync time
+            sync_record.sudo().write({'last_receipt_sync': current_time})
+
+            # Build response
+            response = {
+                'success': True,
+                'warehouse': {
+                    'id': warehouse_id,
+                    'name': app_warehouse.name,
+                },
+                'last_sync_time': last_sync.isoformat() if last_sync else None,
+                'current_sync_time': current_time.isoformat(),
+                'changes': {
+                    'created': created,
+                    'updated': updated,
+                    'validated': validated,
+                    'deleted': []
+                },
+                'summary': {
+                    'total_changes': len(created) + len(updated) + len(validated),
+                    'created_count': len(created),
+                    'updated_count': len(updated),
+                    'validated_count': len(validated),
+                    'deleted_count': 0
+                }
+            }
+
+            return request.make_response(
+                json.dumps(response, default=str, ensure_ascii=False),
+                headers=[('Content-Type', 'application/json')],
+                status=200
+            )
+
+        except Exception as e:
+            _logger.exception("Failed to fetch stock receipt sync data")
+            return request.make_response(
+                json.dumps({'error': str(e), 'success': False}),
+                headers=[('Content-Type', 'application/json')],
+                status=500
+            )
 
     @http.route('/api/stock/receive', type='json', auth='public', methods=['POST'])
     def receive_stock_picking(self):
