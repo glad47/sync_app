@@ -3259,8 +3259,8 @@ class PosSyncController(http.Controller):
                 "date": "2024-12-22",
                 "amount_total": 1150.0,
                 "state": "posted",
-                "zatca_status": "delivered",
-                "zatca_delivery_date": "2024-12-22T10:30:00"
+                "zatca_sent": true,
+                "edi_state": "sent"
             }
         }
         """
@@ -3280,8 +3280,11 @@ class PosSyncController(http.Controller):
                     am.invoice_date AS date,
                     am.amount_total,
                     am.state,
-                    am.zatca_status,
-                    am.zatca_delivery_date,
+                    am.edi_state,
+                    CASE 
+                        WHEN am.edi_state = 'sent' THEN true
+                        ELSE false
+                    END AS zatca_sent,
                     am.write_date
                 FROM account_move am
                 LEFT JOIN res_partner rp ON rp.id = am.partner_id
