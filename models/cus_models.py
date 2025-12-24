@@ -441,27 +441,8 @@ class ProductTemplate(models.Model):
         return result
 
     def write(self, vals):
-        print(" ******************************1***************************")
-        
-        # Checkpoint 1: Method called
-        _create_checkpoint_log("product.write.checkpoint_1", {
-            "checkpoint": "write method called",
-            "vals": vals,
-            "product_ids": self.ids
-        })
-        
         # Skip webhook if product is not available in POS or has no barcode
         if not self.available_in_pos or not self.barcode:
-            print(" *****************************2*****************************")
-            
-            # Checkpoint 2: Skipped - not in POS or no barcode
-            _create_checkpoint_log("product.write.checkpoint_2", {
-                "checkpoint": "skipped - not available in POS or no barcode",
-                "available_in_pos": self.available_in_pos,
-                "barcode": self.barcode,
-                "product_ids": self.ids
-            })
-            
             return super().write(vals)
         
         # Skip webhook if product is updated by loyalty program
@@ -469,48 +450,17 @@ class ProductTemplate(models.Model):
         if (self._context.get('from_loyalty_program') or 
             self._context.get('loyalty_program_id') or 
             context_model == 'loyalty.program'):
-            print(" *****************************3*****************************")
-            
-            # Checkpoint 3: Skipped - loyalty program
-            _create_checkpoint_log("product.write.checkpoint_3", {
-                "checkpoint": "skipped - loyalty program context",
-                "context_model": context_model,
-                "product_ids": self.ids
-            })
-            
             return super().write(vals)
         
         price_fields = ['list_price', 'standard_price']
         price_changed = any(field in vals for field in price_fields)
         
         if not price_changed:
-            # Checkpoint: Skipped - no price change
-            _create_checkpoint_log("product.write.checkpoint_no_price", {
-                "checkpoint": "skipped - no price change",
-                "vals": vals,
-                "product_ids": self.ids
-            })
             return super().write(vals)
         
         result = super().write(vals)
-        print(" *****************************4*****************************")
-        
-        # Checkpoint 4: After write executed
-        _create_checkpoint_log("product.write.checkpoint_4", {
-            "checkpoint": "write executed successfully",
-            "result": result,
-            "product_ids": self.ids
-        })
-        
+
         if self.product_variant_ids:
-            print(" *****************************5*****************************")
-            
-            # Checkpoint 5: Has product variants
-            _create_checkpoint_log("product.write.checkpoint_5", {
-                "checkpoint": "has product variants",
-                "variant_count": len(self.product_variant_ids),
-                "product_ids": self.ids
-            })
             
             if result: 
                 data = vals
@@ -526,14 +476,6 @@ class ProductTemplate(models.Model):
                     "ids": self.ids,
                     "data": data
                 }
-                print(" *****************************6*****************************")
-                
-                # Checkpoint 6: Sending webhook
-                _create_checkpoint_log("product.write.checkpoint_6", {
-                    "checkpoint": "sending webhook",
-                    "payload": payload,
-                    "product_ids": self.ids
-                })
                 
                 send_webhook(payload)
         
@@ -2348,6 +2290,165 @@ class PosSyncController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             }
+
+
+    
+    @http.route('/api/sync/product', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_product_sync(self, **kwargs):
+        """
+        Get all products changed since last sync.
+        Returns created, updated, and deleted products.
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+        
+        # Get sync tracker
+        sync_record = request.env['sync.update'].sudo().get_sync_record()
+        last_sync = sync_record.last_product_sync
+        current_time = datetime.utcnow()
+        
+        # Build the query
+        if last_sync:
+            # Get products changed since last sync
+            query = """
+                SELECT 
+                    pt.id,
+                    pt.name,
+                    pt.list_price,
+                    pt.volume,
+                    pt.weight,
+                    pt.active,
+                    pt.barcode,
+                    pp.id AS product_id,
+                    uom.id AS uom_id,
+                    uom.name AS uom_name,
+                    uom.uom_type,
+                    uom.rounding AS uom_rounding,
+                    uom.factor AS uom_factor,
+                    uom.factor_inv AS uom_factor_inv,
+                    CASE 
+                        WHEN pt.create_date > %s THEN 'created'
+                        WHEN pt.write_date > %s AND pt.create_date <= %s THEN 'updated'
+                    END AS change_type
+                FROM product_template pt
+                LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
+                LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
+                WHERE pt.available_in_pos = TRUE 
+                AND pt.barcode IS NOT NULL
+                AND pt.barcode != ''
+                AND (pt.create_date > %s OR pt.write_date > %s)
+                ORDER BY pt.id, pp.id
+            """
+            request.env.cr.execute(query, (last_sync, last_sync, last_sync, last_sync, last_sync))
+        else:
+            # First sync - get all products
+            query = """
+                SELECT 
+                    pt.id,
+                    pt.name,
+                    pt.list_price,
+                    pt.volume,
+                    pt.weight,
+                    pt.active,
+                    pt.barcode,
+                    pp.id AS product_id,
+                    uom.id AS uom_id,
+                    uom.name AS uom_name,
+                    uom.uom_type,
+                    uom.rounding AS uom_rounding,
+                    uom.factor AS uom_factor,
+                    uom.factor_inv AS uom_factor_inv,
+                    'created' AS change_type
+                FROM product_template pt
+                LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
+                LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
+                WHERE pt.available_in_pos = TRUE 
+                AND pt.barcode IS NOT NULL
+                AND pt.barcode != ''
+                ORDER BY pt.id, pp.id
+            """
+            request.env.cr.execute(query)
+        
+        raw_results = request.env.cr.dictfetchall()
+        
+        # Format results
+        created = []
+        updated = []
+        
+        for row in raw_results:
+            # Build uom_id data
+            uom_data = None
+            if row.get('uom_id'):
+                uom_data = {
+                    'id': row['uom_id'],
+                    'name': row['uom_name'],
+                    'uom_type': row['uom_type'],
+                    'rounding': float(row['uom_rounding']) if row['uom_rounding'] else None,
+                    'factor': float(row['uom_factor']) if row['uom_factor'] else None,
+                    'factor_inv': float(row['uom_factor_inv']) if row['uom_factor_inv'] else None,
+                }
+            
+            # Build product data in the same format as original webhook
+            data = {
+                'id': row['id'],
+                'name': row['name'],
+                'uom_id': uom_data,
+                'barcode': row['barcode'],
+                'list_price': float(row['list_price']) if row['list_price'] else 0.0,
+                'display_name': row['name'],
+                'volume': float(row['volume']) if row['volume'] else 0.0,
+                'weight': float(row['weight']) if row['weight'] else 0.0,
+                'active': row['active'],
+                'product_id': row['product_id'],
+            }
+            
+            payload = {
+                'operation': 0 if row['change_type'] == 'created' else 1,
+                'type': 0,
+                'model': 'product.template',
+                'ids': [row['id']],
+                'data': data
+            }
+            
+            if row['change_type'] == 'created':
+                created.append(payload)
+            else:
+                updated.append(payload)
+        
+        # Update last sync time
+        sync_record.sudo().write({'last_product_sync': current_time})
+        
+        # Build response
+        response = {
+            'success': True,
+            'last_sync_time': last_sync.isoformat() if last_sync else None,
+            'current_sync_time': current_time.isoformat(),
+            'changes': {
+                'created': created,
+                'updated': updated,
+                'deleted': []  # Would need separate tracking for deleted records
+            },
+            'summary': {
+                'total_changes': len(created) + len(updated),
+                'created_count': len(created),
+                'updated_count': len(updated),
+                'deleted_count': 0
+            }
+        }
+        
+        return request.make_response(
+            json.dumps(response, default=str, ensure_ascii=False),
+            headers=[('Content-Type', 'application/json')],
+            status=200
+        )        
             
     @http.route('/api/loyalty/programs', type='json', auth='public', methods=['GET'])
     def get_loyalty_programs(self, **kwargs):

@@ -6,4 +6,6 @@ access_sync_app_config_admin,sync.app.config admin,model_sync_app_config,sync_ap
 access_warehouse_contact_mapping_user,warehouse.contact.mapping user,model_warehouse_contact_mapping,sync_app.group_api_user,1,0,0,0
 access_warehouse_contact_mapping_admin,warehouse.contact.mapping admin,model_warehouse_contact_mapping,sync_app.group_api_admin,1,1,1,1
 access_webhook_log_user,webhook.log.user,model_webhook_log,base.group_user,1,0,0,0
-access_webhook_log_manager,webhook.log.manager,model_webhook_log,base.group_system,1,1,1,1
+access_webhook_log_admin,webhook.log.admin,model_webhook_log,base.group_system,1,1,1,1
+access_sync_update_user,sync.update.user,model_sync_update,base.group_user,1,0,0,0
+access_sync_update_admin,sync.update.admin,model_sync_update,base.group_system,1,1,1,1
