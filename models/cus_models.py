@@ -3821,8 +3821,8 @@ class PurchaseOrderReceivingController(http.Controller):
                 status=500
             )
 
-    @http.route('/api/purchase/receive', type='json', auth='public', methods=['POST'])
-    def receive_purchase_order(self):
+    @http.route('/api/purchase/receive', type='http', auth='public', methods=['POST'], csrf=False)
+    def receive_purchase_order(self, **kwargs):
         """
         API to receive purchase order items
         Expected payload:
@@ -3832,10 +3832,6 @@ class PurchaseOrderReceivingController(http.Controller):
                 {
                     "line_id": 1,
                     "qty_received": 10.0
-                },
-                {
-                    "line_id": 2,
-                    "qty_received": 5.0
                 }
             ]
         }
@@ -3845,24 +3841,28 @@ class PurchaseOrderReceivingController(http.Controller):
         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+            return request.make_json_response({
+                'error': 'Unauthorized or token expired',
+                'status': 401
+            }, status=401)
 
         try:
+            # Parse JSON body directly
             data = json.loads(request.httprequest.data)
             po_name = data.get('po_name')
             lines_to_receive = data.get('lines', [])
 
             if not po_name:
-                return {
+                return request.make_json_response({
                     'status': 'error',
                     'message': 'Purchase order name is required'
-                }
+                })
 
             if not lines_to_receive:
-                return {
+                return request.make_json_response({
                     'status': 'error',
                     'message': 'No lines to receive'
-                }
+                })
 
             # Find the purchase order
             purchase_order = request.env['purchase.order'].sudo().search([
@@ -3870,27 +3870,66 @@ class PurchaseOrderReceivingController(http.Controller):
             ], limit=1)
 
             if not purchase_order:
-                return {
+                return request.make_json_response({
                     'status': 'error',
                     'message': f'Purchase order {po_name} not found'
-                }
+                })
 
-            if purchase_order.state not in ['purchase', 'done']:
-                return {
+            # Check if PO is cancelled
+            if purchase_order.state == 'cancel':
+                return request.make_json_response({
                     'status': 'error',
-                    'message': f'Purchase order {po_name} is not confirmed'
-                }
+                    'message': f'Purchase order {po_name} is cancelled'
+                })
 
-            # Process each line
-            received_lines = []
-            errors = []
+            # Check if PO is confirmed
+            if purchase_order.state not in ['purchase', 'done']:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Purchase order {po_name} is not confirmed (current state: {purchase_order.state})'
+                })
 
+            # Check if all pickings are already done
+            pickings = purchase_order.picking_ids.filtered(
+                lambda p: p.state != 'cancel'
+            )
+
+            if not pickings:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'No receipt found for this purchase order'
+                })
+
+            # Check if all receipts are already validated
+            all_done = all(picking.state == 'done' for picking in pickings)
+            if all_done:
+                return request.make_json_response({
+                    'status': 'success',
+                    'message': 'Purchase order already validated',
+                    'purchase_order': {
+                        'id': purchase_order.id,
+                        'name': purchase_order.name,
+                        'state': purchase_order.state
+                    },
+                    'validated_pickings': [
+                        {
+                            'id': p.id,
+                            'name': p.name,
+                            'state': p.state
+                        } for p in pickings
+                    ]
+                })
+
+            # STEP 1: Validate all quantities BEFORE processing
+            validation_errors = []
+            pending_pickings = pickings.filtered(lambda p: p.state not in ['done', 'cancel'])
+            
             for line_data in lines_to_receive:
                 line_id = line_data.get('line_id')
                 qty_to_receive = line_data.get('qty_received', 0)
 
                 if qty_to_receive <= 0:
-                    errors.append(f'Line {line_id}: Invalid quantity')
+                    validation_errors.append(f'Line {line_id}: Invalid quantity {qty_to_receive}')
                     continue
 
                 # Find the purchase order line
@@ -3900,35 +3939,60 @@ class PurchaseOrderReceivingController(http.Controller):
                 ], limit=1)
 
                 if not po_line:
-                    errors.append(f'Line {line_id}: Not found in purchase order {po_name}')
+                    validation_errors.append(f'Line {line_id}: Not found in purchase order {po_name}')
+                    continue
+
+                # Check if stock move exists for this line
+                move_exists = False
+                for picking in pending_pickings:
+                    moves = picking.move_ids.filtered(
+                        lambda m: m.purchase_line_id.id == line_id and m.state not in ['done', 'cancel']
+                    )
+                    if moves:
+                        move_exists = True
+                        break
+                
+                if not move_exists:
+                    validation_errors.append(
+                        f'Line {line_id} ({po_line.product_id.name}): No stock move found for this line'
+                    )
                     continue
 
                 # Check if qty exceeds ordered quantity
                 remaining_qty = po_line.product_qty - po_line.qty_received
                 if qty_to_receive > remaining_qty:
-                    errors.append(
-                        f'Line {line_id}: Quantity to receive ({qty_to_receive}) '
-                        f'exceeds remaining quantity ({remaining_qty})'
+                    validation_errors.append(
+                        f'Line {line_id} ({po_line.product_id.name}): '
+                        f'Quantity to receive ({qty_to_receive}) exceeds remaining quantity ({remaining_qty})'
                     )
-                    continue
 
-                # Find the related stock picking (receipt)
-                pickings = purchase_order.picking_ids.filtered(
-                    lambda p: p.state not in ['done', 'cancel']
-                )
+            # If any validation errors, return immediately without processing
+            if validation_errors:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'Validation failed',
+                    'errors': validation_errors
+                })
 
-                if not pickings:
-                    errors.append(f'Line {line_id}: No receipt found for this purchase order')
-                    continue
+            # STEP 2: Process the receipt (all validations passed)
+            received_lines = []
 
-                # Update the stock move
-                for picking in pickings:
+            for line_data in lines_to_receive:
+                line_id = line_data.get('line_id')
+                qty_to_receive = line_data.get('qty_received')
+
+                po_line = request.env['purchase.order.line'].sudo().search([
+                    ('id', '=', line_id),
+                    ('order_id', '=', purchase_order.id)
+                ], limit=1)
+
+                # Update the stock moves
+                for picking in pending_pickings:
                     moves = picking.move_ids.filtered(
                         lambda m: m.purchase_line_id.id == line_id and m.state not in ['done', 'cancel']
                     )
 
                     for move in moves:
-                        # Set the quantity done
                         move_qty = min(qty_to_receive, move.product_uom_qty)
                         move.write({'quantity_done': move_qty})
                         
@@ -3945,42 +4009,43 @@ class PurchaseOrderReceivingController(http.Controller):
                         if qty_to_receive <= 0:
                             break
 
-            # Validate pickings that have all quantities set
+            # STEP 3: Validate all pending pickings
             validated_pickings = []
-            for picking in purchase_order.picking_ids.filtered(
-                lambda p: p.state not in ['done', 'cancel']
-            ):
-                # Check if all moves have quantity_done > 0
-                if all(move.quantity_done > 0 for move in picking.move_ids):
-                    try:
-                        # Validate the picking
-                        picking.button_validate()
-                        validated_pickings.append({
-                            'id': picking.id,
-                            'name': picking.name,
-                            'state': picking.state
-                        })
-                    except Exception as e:
-                        errors.append(f'Picking {picking.name}: Validation failed - {str(e)}')
 
-            return {
-                'status': 'success' if not errors else 'partial_success',
+            for picking in pending_pickings:
+                try:
+                    # Use _action_done which is the core validation method
+                    picking._action_done()
+                    
+                    validated_pickings.append({
+                        'id': picking.id,
+                        'name': picking.name,
+                        'state': picking.state
+                    })
+                    
+                except Exception as e:
+                    _logger.exception(f"Failed to validate picking {picking.name}")
+                    return request.make_json_response({
+                        'status': 'error',
+                        'message': f'Failed to validate receipt {picking.name}: {str(e)}'
+                    })
+            return request.make_json_response({
+                'status': 'success',
                 'purchase_order': {
                     'id': purchase_order.id,
                     'name': purchase_order.name,
                     'state': purchase_order.state
                 },
                 'received_lines': received_lines,
-                'validated_pickings': validated_pickings,
-                'errors': errors if errors else None
-            }
+                'validated_pickings': validated_pickings
+            })
 
         except Exception as e:
             _logger.exception("Failed to receive purchase order items")
-            return {
+            return request.make_json_response({
                 'status': 'error',
                 'message': str(e)
-            }
+            })
 
 
     @http.route('/api/purchase/order/<string:po_name>', type='json', auth='public', methods=['GET'])
@@ -4145,7 +4210,7 @@ class StockReceivingController(http.Controller):
     def get_receipt_sync(self, **kwargs):
         """
         Get all incoming stock receipts to App warehouse changed since last sync.
-        Returns created, updated, and validated receipts.
+        Returns created, updated, and validated receipts (including purchase order receipts).
         
         Request:
         GET /api/sync/receipt
@@ -4247,19 +4312,19 @@ class StockReceivingController(http.Controller):
 
                     WHERE sw.id = %s
                     AND spt.code = 'incoming'
-                    AND sp.state IN ('confirmed', 'cancel')
                     AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
                     ORDER BY sp.id, sm.id;
                 """
                 request.env.cr.execute(query, (
-                    last_sync,  # created
-                    last_sync,  # validated
-                    last_sync, last_sync,  # updated
+                    last_sync,  # created check
+                    last_sync,  # cancelled check
+                    last_sync,  # validated check
+                    last_sync, last_sync,  # updated check
                     warehouse_id,  # warehouse filter
-                    last_sync, last_sync, last_sync  # date filter
+                    last_sync, last_sync, last_sync  # date filters
                 ))
             else:
-                # First sync - get all incoming receipts
+                # First sync - get all incoming receipts (including PO receipts)
                 query = """
                     SELECT
                         sp.id AS picking_id,
