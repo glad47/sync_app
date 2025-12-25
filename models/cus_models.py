@@ -4249,7 +4249,7 @@ class StockReceivingController(http.Controller):
 
             # Get sync tracker
             sync_record = request.env['sync.update'].sudo().get_sync_record()
-            last_sync = sync_record.last_receipt_sync
+            last_sync = sync_record.last_transfer_sync
             current_time = datetime.utcnow()
 
             # Build the query
@@ -4468,7 +4468,7 @@ class StockReceivingController(http.Controller):
                     updated.append(payload)
 
             # Update last sync time
-            sync_record.sudo().write({'last_receipt_sync': current_time})
+            sync_record.sudo().write({'last_transfer_sync': current_time})
 
             # Build response
             response = {
@@ -4508,13 +4508,33 @@ class StockReceivingController(http.Controller):
                 status=500
             )
 
-    @http.route('/api/stock/receive', type='json', auth='public', methods=['POST'])
-    def receive_stock_picking(self):
+    @http.route('/api/stock/receive', type='http', auth='public', methods=['POST'], csrf=False)
+    def receive_stock_picking(self, **kwargs):
+        """
+        API to receive stock picking items
+        Expected payload:
+        {
+            "picking_name": "WH/IN/00123",
+            "lines": [
+                {
+                    "move_id": 1,
+                    "qty_received": 10.0
+                },
+                {
+                    "move_id": 2,
+                    "qty_received": 5.0
+                }
+            ]
+        }
+        """
         token = request.httprequest.headers.get('Authorization')
         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+            return request.make_json_response({
+                'error': 'Unauthorized or token expired',
+                'status': 401
+            }, status=401)
 
         try:
             data = json.loads(request.httprequest.data)
@@ -4522,255 +4542,257 @@ class StockReceivingController(http.Controller):
             lines_to_receive = data.get('lines', [])
 
             if not picking_name:
-                return {'status': 'error', 'message': 'Stock picking name is required'}
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'Stock picking name is required'
+                })
 
             if not lines_to_receive:
-                return {'status': 'error', 'message': 'No lines to receive'}
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'No lines to receive'
+                })
 
-            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+            # Find the stock picking
+            picking = request.env['stock.picking'].sudo().search([
+                ('name', '=', picking_name)
+            ], limit=1)
 
             if not picking:
-                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} not found'
+                })
 
-            if picking.state == 'done':
-                return {'status': 'error', 'message': f'Stock picking {picking_name} is already done'}
-
+            # Check if picking is cancelled
             if picking.state == 'cancel':
-                return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is cancelled'
+                })
 
-            received_lines = []
-            errors = []
+            # Check if picking is already validated
+            if picking.state == 'done':
+                return request.make_json_response({
+                    'status': 'success',
+                    'message': 'Stock picking already validated',
+                    'picking': {
+                        'id': picking.id,
+                        'name': picking.name,
+                        'state': picking.state,
+                        'date_done': picking.date_done.isoformat() if picking.date_done else None
+                    }
+                })
+
+            # STEP 1: Validate all quantities BEFORE processing
+            validation_errors = []
             
-            # Get list of move_ids that we're receiving
-            receiving_move_ids = [line.get('move_id') for line in lines_to_receive]
-
-            # IMPORTANT: Set quantity_done to 0 for all moves NOT in the request
-            # This prevents Odoo from auto-filling unreceived items
-            for move in picking.move_ids:
-                if move.id not in receiving_move_ids and move.state not in ['done', 'cancel']:
-                    move.write({'quantity_done': 0})
-
             for line_data in lines_to_receive:
                 move_id = line_data.get('move_id')
-                qty_to_receive = float(line_data.get('qty_received', 0))
+                qty_to_receive = line_data.get('qty_received', 0)
 
                 if qty_to_receive <= 0:
-                    errors.append(f'Move {move_id}: Invalid quantity')
+                    validation_errors.append(f'Move {move_id}: Invalid quantity {qty_to_receive}')
                     continue
 
+                # Find the stock move
                 move = request.env['stock.move'].sudo().search([
                     ('id', '=', move_id),
                     ('picking_id', '=', picking.id)
                 ], limit=1)
 
                 if not move:
-                    errors.append(f'Move {move_id}: Not found in picking {picking_name}')
+                    validation_errors.append(f'Move {move_id}: Not found in picking {picking_name}')
                     continue
 
+                # Check if qty exceeds ordered quantity
                 remaining_qty = move.product_uom_qty - move.quantity_done
                 if qty_to_receive > remaining_qty:
-                    errors.append(f'Move {move_id}: Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})')
-                    continue
+                    validation_errors.append(
+                        f'Move {move_id} ({move.product_id.name}): '
+                        f'Quantity to receive ({qty_to_receive}) exceeds remaining quantity ({remaining_qty})'
+                    )
 
-                # Set the exact quantity done (not add, but set)
+            # If any validation errors, return immediately without processing
+            if validation_errors:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'Validation failed',
+                    'errors': validation_errors
+                })
+
+            # STEP 2: Process the receipt (all validations passed)
+            received_lines = []
+
+            for line_data in lines_to_receive:
+                move_id = line_data.get('move_id')
+                qty_to_receive = line_data.get('qty_received')
+
+                move = request.env['stock.move'].sudo().search([
+                    ('id', '=', move_id),
+                    ('picking_id', '=', picking.id)
+                ], limit=1)
+
+                # Set the quantity done
                 move.write({'quantity_done': qty_to_receive})
-
+                
                 received_lines.append({
                     'move_id': move_id,
                     'product_id': move.product_id.id,
                     'product_name': move.product_id.name,
-                    'product_barcode': move.product_id.barcode if move.product_id.barcode else '',
-                    'qty_received': qty_to_receive,
-                    'total_qty_done': qty_to_receive,
-                    'qty_remaining': move.product_uom_qty - qty_to_receive,
+                    'product_barcode': move.product_id.barcode,
+                    'qty_received': qty_to_receive
                 })
 
-            # ALWAYS validate the picking after receiving any lines - WITHOUT BACKORDER
-            validated = False
-            validation_error = None
-            
-            if received_lines:  # Only validate if we successfully received at least one line
-                try:
-                    # First, cancel moves that have quantity_done = 0
-                    moves_to_cancel = picking.move_ids.filtered(
-                        lambda m: m.quantity_done == 0 and m.state not in ['done', 'cancel']
-                    )
-                    if moves_to_cancel:
-                        moves_to_cancel._action_cancel()
-                    
-                    # Now validate the picking
-                    result = picking.button_validate()
-                    
-                    # Handle wizard response (for backorders, etc.)
-                    if isinstance(result, dict):
-                        # Check if it's a backorder confirmation wizard
-                        if result.get('res_model') == 'stock.backorder.confirmation':
-                            wizard_id = result.get('res_id')
-                            if wizard_id:
-                                wizard = request.env['stock.backorder.confirmation'].sudo().browse(wizard_id)
-                                # Process cancel - NO BACKORDER (validates without creating backorder)
-                                wizard.process_cancel_backorder()
-                        
-                        # Check if it's an immediate transfer wizard
-                        elif result.get('res_model') == 'stock.immediate.transfer':
-                            wizard_id = result.get('res_id')
-                            if wizard_id:
-                                wizard = request.env['stock.immediate.transfer'].sudo().browse(wizard_id)
-                                wizard.process()
-                    
-                    # Double-check the state and force validation if needed
-                    if picking.state != 'done':
-                        # Force the picking to done state
-                        picking.write({'state': 'done', 'date_done': fields.Datetime.now()})
-                        # Mark all moves as done
-                        for move in picking.move_ids.filtered(lambda m: m.quantity_done > 0):
-                            if move.state != 'done':
-                                move.write({'state': 'done'})
-                    
-                    validated = True
-                    _logger.info(f"✓ Successfully validated picking {picking_name} without backorder")
-                    
-                except Exception as e:
-                    validation_error = str(e)
-                    errors.append(f'Validation failed: {validation_error}')
-                    _logger.exception(f"Failed to validate picking {picking_name}")
-
-            return {
-                'status': 'success' if not errors else 'partial_success',
-                'picking': {
+            # STEP 3: Validate the picking
+            try:
+                # Use _action_done which is the core validation method
+                picking._action_done()
+                
+                validated_picking = {
                     'id': picking.id,
                     'name': picking.name,
                     'state': picking.state,
-                    'date_done': picking.date_done.isoformat() if picking.date_done else None,
-                    'validated': validated
-                },
-                'received_lines': received_lines,
-                'errors': errors if errors else None,
-                'summary': {
-                    'total_lines_processed': len(lines_to_receive),
-                    'successful_lines': len(received_lines),
-                    'failed_lines': len(errors),
-                    'picking_validated': validated
+                    'date_done': picking.date_done.isoformat() if picking.date_done else None
                 }
-            }
+                
+            except Exception as e:
+                _logger.exception(f"Failed to validate picking {picking.name}")
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Failed to validate receipt {picking.name}: {str(e)}'
+                })
+
+            return request.make_json_response({
+                'status': 'success',
+                'picking': validated_picking,
+                'received_lines': received_lines,
+                'summary': {
+                    'total_lines': len(received_lines),
+                    'picking_validated': True
+                }
+            })
 
         except Exception as e:
             _logger.exception("Failed to receive stock picking items")
-            return {'status': 'error', 'message': str(e)}
+            return request.make_json_response({
+                'status': 'error',
+                'message': str(e)
+            })
 
-    @http.route('/api/stock/receive/single', type='json', auth='public', methods=['POST'])
-    def receive_single_line(self):
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    # @http.route('/api/stock/receive/single', type='json', auth='public', methods=['POST'])
+    # def receive_single_line(self):
+    #     token = request.httprequest.headers.get('Authorization')
+    #     user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+    #     if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+    #         return {'error': 'Unauthorized or token expired'}, 401
 
-        try:
-            data = json.loads(request.httprequest.data)
-            picking_name = data.get('picking_name')
-            move_id = data.get('move_id')
-            qty_to_receive = data.get('qty_received', 0)
+    #     try:
+    #         data = json.loads(request.httprequest.data)
+    #         picking_name = data.get('picking_name')
+    #         move_id = data.get('move_id')
+    #         qty_to_receive = data.get('qty_received', 0)
 
-            if not picking_name:
-                return {'status': 'error', 'message': 'Stock picking name is required'}
+    #         if not picking_name:
+    #             return {'status': 'error', 'message': 'Stock picking name is required'}
 
-            if not move_id:
-                return {'status': 'error', 'message': 'Move ID is required'}
+    #         if not move_id:
+    #             return {'status': 'error', 'message': 'Move ID is required'}
 
-            if qty_to_receive <= 0:
-                return {'status': 'error', 'message': 'Quantity must be greater than 0'}
+    #         if qty_to_receive <= 0:
+    #             return {'status': 'error', 'message': 'Quantity must be greater than 0'}
 
-            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+    #         picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
 
-            if not picking:
-                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+    #         if not picking:
+    #             return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
 
-            if picking.state == 'done':
-                return {'status': 'error', 'message': f'Stock picking {picking_name} is already done'}
+    #         if picking.state == 'done':
+    #             return {'status': 'error', 'message': f'Stock picking {picking_name} is already done'}
 
-            if picking.state == 'cancel':
-                return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
+    #         if picking.state == 'cancel':
+    #             return {'status': 'error', 'message': f'Stock picking {picking_name} is cancelled'}
 
-            move = request.env['stock.move'].sudo().search([
-                ('id', '=', move_id),
-                ('picking_id', '=', picking.id)
-            ], limit=1)
+    #         move = request.env['stock.move'].sudo().search([
+    #             ('id', '=', move_id),
+    #             ('picking_id', '=', picking.id)
+    #         ], limit=1)
 
-            if not move:
-                return {'status': 'error', 'message': f'Move {move_id} not found in picking {picking_name}'}
+    #         if not move:
+    #             return {'status': 'error', 'message': f'Move {move_id} not found in picking {picking_name}'}
 
-            remaining_qty = move.product_uom_qty - move.quantity_done
-            if qty_to_receive > remaining_qty:
-                return {'status': 'error', 'message': f'Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})'}
+    #         remaining_qty = move.product_uom_qty - move.quantity_done
+    #         if qty_to_receive > remaining_qty:
+    #             return {'status': 'error', 'message': f'Quantity ({qty_to_receive}) exceeds remaining ({remaining_qty})'}
 
-            move.write({'quantity_done': move.quantity_done + qty_to_receive})
+    #         move.write({'quantity_done': move.quantity_done + qty_to_receive})
 
-            return {
-                'status': 'success',
-                'picking': {'id': picking.id, 'name': picking.name, 'state': picking.state},
-                'received_line': {
-                    'move_id': move_id,
-                    'product_id': move.product_id.id,
-                    'product_name': move.product_id.name,
-                    'product_barcode': move.product_id.barcode,
-                    'qty_received': qty_to_receive,
-                    'total_qty_done': move.quantity_done,
-                    'qty_ordered': move.product_uom_qty,
-                    'qty_remaining': move.product_uom_qty - move.quantity_done,
-                }
-            }
+    #         return {
+    #             'status': 'success',
+    #             'picking': {'id': picking.id, 'name': picking.name, 'state': picking.state},
+    #             'received_line': {
+    #                 'move_id': move_id,
+    #                 'product_id': move.product_id.id,
+    #                 'product_name': move.product_id.name,
+    #                 'product_barcode': move.product_id.barcode,
+    #                 'qty_received': qty_to_receive,
+    #                 'total_qty_done': move.quantity_done,
+    #                 'qty_ordered': move.product_uom_qty,
+    #                 'qty_remaining': move.product_uom_qty - move.quantity_done,
+    #             }
+    #         }
 
-        except Exception as e:
-            _logger.exception("Failed to receive single stock move line")
-            return {'status': 'error', 'message': str(e)}
+    #     except Exception as e:
+    #         _logger.exception("Failed to receive single stock move line")
+    #         return {'status': 'error', 'message': str(e)}
 
-    @http.route('/api/stock/picking/<string:picking_name>', type='json', auth='public', methods=['GET'])
-    def get_picking_details(self, picking_name):
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    # @http.route('/api/stock/picking/<string:picking_name>', type='json', auth='public', methods=['GET'])
+    # def get_picking_details(self, picking_name):
+    #     token = request.httprequest.headers.get('Authorization')
+    #     user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+    #     if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+    #         return {'error': 'Unauthorized or token expired'}, 401
 
-        try:
-            picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
+    #     try:
+    #         picking = request.env['stock.picking'].sudo().search([('name', '=', picking_name)], limit=1)
 
-            if not picking:
-                return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
+    #         if not picking:
+    #             return {'status': 'error', 'message': f'Stock picking {picking_name} not found'}
 
-            moves_data = []
-            for move in picking.move_ids:
-                moves_data.append({
-                    'move_id': move.id,
-                    'product_id': move.product_id.id,
-                    'product_name': move.product_id.name,
-                    'product_barcode': move.product_id.barcode,
-                    'product_code': move.product_id.default_code,
-                    'qty_ordered': move.product_uom_qty,
-                    'qty_done': move.quantity_done,
-                    'qty_remaining': move.product_uom_qty - move.quantity_done,
-                    'uom_name': move.product_uom.name,
-                    'state': move.state
-                })
+    #         moves_data = []
+    #         for move in picking.move_ids:
+    #             moves_data.append({
+    #                 'move_id': move.id,
+    #                 'product_id': move.product_id.id,
+    #                 'product_name': move.product_id.name,
+    #                 'product_barcode': move.product_id.barcode,
+    #                 'product_code': move.product_id.default_code,
+    #                 'qty_ordered': move.product_uom_qty,
+    #                 'qty_done': move.quantity_done,
+    #                 'qty_remaining': move.product_uom_qty - move.quantity_done,
+    #                 'uom_name': move.product_uom.name,
+    #                 'state': move.state
+    #             })
 
-            return {
-                'status': 'success',
-                'picking': {
-                    'id': picking.id,
-                    'name': picking.name,
-                    'state': picking.state,
-                    'origin': picking.origin,
-                    'partner_name': picking.partner_id.name if picking.partner_id else None,
-                    'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
-                    'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
-                    'moves': moves_data
-                }
-            }
+    #         return {
+    #             'status': 'success',
+    #             'picking': {
+    #                 'id': picking.id,
+    #                 'name': picking.name,
+    #                 'state': picking.state,
+    #                 'origin': picking.origin,
+    #                 'partner_name': picking.partner_id.name if picking.partner_id else None,
+    #                 'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+    #                 'warehouse_name': picking.picking_type_id.warehouse_id.name if picking.picking_type_id.warehouse_id else None,
+    #                 'moves': moves_data
+    #             }
+    #         }
 
-        except Exception as e:
-            _logger.exception("Failed to get stock picking details")
-            return {'status': 'error', 'message': str(e)}
+    #     except Exception as e:
+    #         _logger.exception("Failed to get stock picking details")
+    #         return {'status': 'error', 'message': str(e)}
 
     @http.route('/api/stock/picking/validate', type='json', auth='public', methods=['POST'])
     def validate_picking(self):
