@@ -11,6 +11,7 @@ class SyncUpdate(models.Model):
     last_loyalty_sync = fields.Datetime(string='Last Loyalty Sync')
     last_receipt_sync = fields.Datetime(string='Last Receipt Sync')
     last_transfer_sync = fields.Datetime(string='Last Transfer Sync')
+    last_delivery_sync =  fields.Datetime(string='Last Delivery Sync')
     
     @api.model
     def get_sync_record(self):

@@ -15,285 +15,285 @@ from datetime import date, datetime, timedelta
 _logger = logging.getLogger(__name__)
 
 
-def sanitize(obj):
-    """Convert datetime objects to ISO format strings"""
-    if isinstance(obj, dict):
-        return {k: sanitize(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [sanitize(v) for v in obj]
-    elif hasattr(obj, 'isoformat'):
-        return obj.isoformat()
-    return obj
+# def sanitize(obj):
+#     """Convert datetime objects to ISO format strings"""
+#     if isinstance(obj, dict):
+#         return {k: sanitize(v) for k, v in obj.items()}
+#     elif isinstance(obj, list):
+#         return [sanitize(v) for v in obj]
+#     elif hasattr(obj, 'isoformat'):
+#         return obj.isoformat()
+#     return obj
 
 
-def _get_webhook_config():
-    """Get webhook configuration from database."""
-    try:
-        from odoo import api, SUPERUSER_ID
-        from odoo.modules.registry import Registry
-        import odoo
+# def _get_webhook_config():
+#     """Get webhook configuration from database."""
+#     try:
+#         from odoo import api, SUPERUSER_ID
+#         from odoo.modules.registry import Registry
+#         import odoo
         
-        db_name = odoo.tools.config.get('db_name')
-        if not db_name:
-            return None
+#         db_name = odoo.tools.config.get('db_name')
+#         if not db_name:
+#             return None
         
-        registry = Registry(db_name)
-        with registry.cursor() as cr:
-            env = api.Environment(cr, SUPERUSER_ID, {})
-            config = env['sync.app.config'].search([('active', '=', True)], limit=1)
+#         registry = Registry(db_name)
+#         with registry.cursor() as cr:
+#             env = api.Environment(cr, SUPERUSER_ID, {})
+#             config = env['sync.app.config'].search([('active', '=', True)], limit=1)
             
-            if not config or not config.webhook_enabled or not config.webhook_url:
-                return None
+#             if not config or not config.webhook_enabled or not config.webhook_url:
+#                 return None
             
-            return {
-                'url': config.webhook_url,
-                'timeout': config.webhook_timeout or 10,
-                'retry_delay': config.webhook_retry_delay or 60,
-                'max_retries': config.webhook_max_retries or 0,
-                'verify_ssl': config.webhook_verify_ssl,
-                'auth_token': config.webhook_auth_token,
-            }
-    except Exception as e:
-        _logger.error(f"Failed to get webhook config: {e}")
-        return None
+#             return {
+#                 'url': config.webhook_url,
+#                 'timeout': config.webhook_timeout or 10,
+#                 'retry_delay': config.webhook_retry_delay or 60,
+#                 'max_retries': config.webhook_max_retries or 0,
+#                 'verify_ssl': config.webhook_verify_ssl,
+#                 'auth_token': config.webhook_auth_token,
+#             }
+#     except Exception as e:
+#         _logger.error(f"Failed to get webhook config: {e}")
+#         return None
 
 
-def _create_webhook_log(payload, config):
-    """Create a webhook log entry"""
-    try:
-        from odoo import api, SUPERUSER_ID
-        from odoo.modules.registry import Registry
-        import odoo
+# def _create_webhook_log(payload, config):
+#     """Create a webhook log entry"""
+#     try:
+#         from odoo import api, SUPERUSER_ID
+#         from odoo.modules.registry import Registry
+#         import odoo
         
-        db_name = odoo.tools.config.get('db_name')
-        if not db_name:
-            _logger.error("No database name found")
-            return None
+#         db_name = odoo.tools.config.get('db_name')
+#         if not db_name:
+#             _logger.error("No database name found")
+#             return None
         
-        registry = Registry(db_name)
-        with registry.cursor() as cr:
-            env = api.Environment(cr, SUPERUSER_ID, {})
+#         registry = Registry(db_name)
+#         with registry.cursor() as cr:
+#             env = api.Environment(cr, SUPERUSER_ID, {})
             
-            headers = {'Content-Type': 'application/json'}
-            if config.get('auth_token'):
-                headers['Authorization'] = f'Bearer {config["auth_token"]}'
+#             headers = {'Content-Type': 'application/json'}
+#             if config.get('auth_token'):
+#                 headers['Authorization'] = f'Bearer {config["auth_token"]}'
             
-            # Map integer operation from webhook to string for database
-            operation_map = {
-                0: 'create', 
-                1: 'update', 
-                2: 'delete',
-                3: 'create',  # validate operations treated as create
-                6: 'create',  # purchase order operations
-                7: 'create'   # stock picking operations
-            }
-            operation_value = operation_map.get(payload.get('operation', 0), 'create')
+#             # Map integer operation from webhook to string for database
+#             operation_map = {
+#                 0: 'create', 
+#                 1: 'update', 
+#                 2: 'delete',
+#                 3: 'create',  # validate operations treated as create
+#                 6: 'create',  # purchase order operations
+#                 7: 'create'   # stock picking operations
+#             }
+#             operation_value = operation_map.get(payload.get('operation', 0), 'create')
             
-            _logger.info(f"Creating webhook log - Model: {payload.get('model')}, Operation: {operation_value}")
+#             _logger.info(f"Creating webhook log - Model: {payload.get('model')}, Operation: {operation_value}")
             
-            log = env['webhook.log'].create({
-                'url': config['url'],
-                'model': payload.get('model', ''),
-                'operation': operation_value,
-                'record_ids': str(payload.get('ids', [])),
-                'payload': json.dumps(payload, indent=2),
-                'headers': json.dumps(headers, indent=2),
-                'status': 'pending',
-                'max_retries': config['max_retries'],
-            })
+#             log = env['webhook.log'].create({
+#                 'url': config['url'],
+#                 'model': payload.get('model', ''),
+#                 'operation': operation_value,
+#                 'record_ids': str(payload.get('ids', [])),
+#                 'payload': json.dumps(payload, indent=2),
+#                 'headers': json.dumps(headers, indent=2),
+#                 'status': 'pending',
+#                 'max_retries': config['max_retries'],
+#             })
             
-            log_id = log.id
-            cr.commit()
+#             log_id = log.id
+#             cr.commit()
             
-            _logger.info(f"✅ Webhook log created with ID: {log_id}")
-            return log_id
+#             _logger.info(f"✅ Webhook log created with ID: {log_id}")
+#             return log_id
             
-    except Exception as e:
-        _logger.error(f"Failed to create webhook log: {e}")
-        import traceback
-        _logger.error(traceback.format_exc())
-        return None
+#     except Exception as e:
+#         _logger.error(f"Failed to create webhook log: {e}")
+#         import traceback
+#         _logger.error(traceback.format_exc())
+#         return None
 
 
-def _update_webhook_log(log_id, values):
-    """Update webhook log entry"""
-    if not log_id:
-        _logger.warning("No log_id provided to update")
-        return
+# def _update_webhook_log(log_id, values):
+#     """Update webhook log entry"""
+#     if not log_id:
+#         _logger.warning("No log_id provided to update")
+#         return
         
-    try:
-        from odoo import api, SUPERUSER_ID
-        from odoo.modules.registry import Registry
-        import odoo
+#     try:
+#         from odoo import api, SUPERUSER_ID
+#         from odoo.modules.registry import Registry
+#         import odoo
         
-        db_name = odoo.tools.config.get('db_name')
-        if not db_name:
-            _logger.error("No database name found")
-            return
+#         db_name = odoo.tools.config.get('db_name')
+#         if not db_name:
+#             _logger.error("No database name found")
+#             return
         
-        registry = Registry(db_name)
-        with registry.cursor() as cr:
-            env = api.Environment(cr, SUPERUSER_ID, {})
-            log = env['webhook.log'].browse(log_id)
+#         registry = Registry(db_name)
+#         with registry.cursor() as cr:
+#             env = api.Environment(cr, SUPERUSER_ID, {})
+#             log = env['webhook.log'].browse(log_id)
             
-            if not log.exists():
-                _logger.error(f"Webhook log {log_id} does not exist")
-                return
+#             if not log.exists():
+#                 _logger.error(f"Webhook log {log_id} does not exist")
+#                 return
                 
-            _logger.info(f"Updating webhook log {log_id} with values: {values.keys()}")
-            log.write(values)
-            cr.commit()
+#             _logger.info(f"Updating webhook log {log_id} with values: {values.keys()}")
+#             log.write(values)
+#             cr.commit()
             
-            _logger.info(f"✅ Webhook log {log_id} updated successfully")
+#             _logger.info(f"✅ Webhook log {log_id} updated successfully")
             
-    except Exception as e:
-        _logger.error(f"Failed to update webhook log {log_id}: {e}")
-        import traceback
-        _logger.error(traceback.format_exc())
+#     except Exception as e:
+#         _logger.error(f"Failed to update webhook log {log_id}: {e}")
+#         import traceback
+#         _logger.error(traceback.format_exc())
 
 
-def _webhook_worker(payload, config, log_id=None):
-    """Worker function that sends webhook"""
-    url = config['url']
-    timeout = config['timeout']
-    retry_delay = config['retry_delay']
-    max_retries = config['max_retries']
-    verify_ssl = config['verify_ssl']
-    auth_token = config['auth_token']
+# def _webhook_worker(payload, config, log_id=None):
+#     """Worker function that sends webhook"""
+#     url = config['url']
+#     timeout = config['timeout']
+#     retry_delay = config['retry_delay']
+#     max_retries = config['max_retries']
+#     verify_ssl = config['verify_ssl']
+#     auth_token = config['auth_token']
     
-    # Prepare headers
-    headers = {'Content-Type': 'application/json'}
-    if auth_token:
-        headers['Authorization'] = f'Bearer {auth_token}'
+#     # Prepare headers
+#     headers = {'Content-Type': 'application/json'}
+#     if auth_token:
+#         headers['Authorization'] = f'Bearer {auth_token}'
     
-    retry_count = 0
-    duration_ms = 0
+#     retry_count = 0
+#     duration_ms = 0
     
-    while True:
-        try:
-            _logger.info(f"Sending webhook to {url} (attempt {retry_count + 1})")
+#     while True:
+#         try:
+#             _logger.info(f"Sending webhook to {url} (attempt {retry_count + 1})")
             
-            # Update status to sending
-            if log_id:
-                _update_webhook_log(log_id, {
-                    'status': 'sending',
-                    'retry_count': retry_count,
-                    'sent_at': datetime.now()
-                })
+#             # Update status to sending
+#             if log_id:
+#                 _update_webhook_log(log_id, {
+#                     'status': 'sending',
+#                     'retry_count': retry_count,
+#                     'sent_at': datetime.now()
+#                 })
             
-            start_time = time.time()
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=timeout,
-                verify=verify_ssl
-            )
-            duration_ms = int((time.time() - start_time) * 1000)
+#             start_time = time.time()
+#             response = requests.post(
+#                 url,
+#                 json=payload,
+#                 headers=headers,
+#                 timeout=timeout,
+#                 verify=verify_ssl
+#             )
+#             duration_ms = int((time.time() - start_time) * 1000)
             
-            response.raise_for_status()
+#             response.raise_for_status()
             
-            if response.ok:
-                _logger.info("✅ Webhook succeeded!")
-                response_body = None
-                try:
-                    response_body = json.dumps(response.json(), indent=2)
-                    _logger.info(f"Response: {response.json()}")
-                except ValueError:
-                    response_body = response.text
-                    _logger.info(f"Response: {response.text}")
+#             if response.ok:
+#                 _logger.info("✅ Webhook succeeded!")
+#                 response_body = None
+#                 try:
+#                     response_body = json.dumps(response.json(), indent=2)
+#                     _logger.info(f"Response: {response.json()}")
+#                 except ValueError:
+#                     response_body = response.text
+#                     _logger.info(f"Response: {response.text}")
                 
-                # Update log as success
-                if log_id:
-                    _update_webhook_log(log_id, {
-                        'status': 'success',
-                        'status_code': response.status_code,
-                        'response_body': response_body,
-                        'completed_at': datetime.now(),
-                        'duration_ms': duration_ms
-                    })
-                break
-            else:
-                _logger.warning(f"Webhook failed: {response.reason}")
-                raise requests.exceptions.HTTPError(response.reason)
+#                 # Update log as success
+#                 if log_id:
+#                     _update_webhook_log(log_id, {
+#                         'status': 'success',
+#                         'status_code': response.status_code,
+#                         'response_body': response_body,
+#                         'completed_at': datetime.now(),
+#                         'duration_ms': duration_ms
+#                     })
+#                 break
+#             else:
+#                 _logger.warning(f"Webhook failed: {response.reason}")
+#                 raise requests.exceptions.HTTPError(response.reason)
 
-        except requests.exceptions.RequestException as e:
-            _logger.error(f"Webhook error: {e}")
+#         except requests.exceptions.RequestException as e:
+#             _logger.error(f"Webhook error: {e}")
             
-            retry_count += 1
+#             retry_count += 1
             
-            # Check max retries (0 = unlimited)
-            if max_retries > 0 and retry_count >= max_retries:
-                _logger.error(f"Max retries ({max_retries}) reached, giving up")
+#             # Check max retries (0 = unlimited)
+#             if max_retries > 0 and retry_count >= max_retries:
+#                 _logger.error(f"Max retries ({max_retries}) reached, giving up")
                 
-                # Update log as error
-                if log_id:
-                    _update_webhook_log(log_id, {
-                        'status': 'error',
-                        'error_message': str(e),
-                        'retry_count': retry_count,
-                        'completed_at': datetime.now(),
-                        'duration_ms': duration_ms
-                    })
-                break
+#                 # Update log as error
+#                 if log_id:
+#                     _update_webhook_log(log_id, {
+#                         'status': 'error',
+#                         'error_message': str(e),
+#                         'retry_count': retry_count,
+#                         'completed_at': datetime.now(),
+#                         'duration_ms': duration_ms
+#                     })
+#                 break
             
-            # Update log as retrying
-            if log_id:
-                next_retry = datetime.now() + timedelta(seconds=retry_delay)
-                _update_webhook_log(log_id, {
-                    'status': 'retrying',
-                    'error_message': str(e),
-                    'retry_count': retry_count,
-                    'next_retry_at': next_retry
-                })
+#             # Update log as retrying
+#             if log_id:
+#                 next_retry = datetime.now() + timedelta(seconds=retry_delay)
+#                 _update_webhook_log(log_id, {
+#                     'status': 'retrying',
+#                     'error_message': str(e),
+#                     'retry_count': retry_count,
+#                     'next_retry_at': next_retry
+#                 })
             
-            _logger.info(f"Retrying in {retry_delay} seconds...")
-            time.sleep(retry_delay)
+#             _logger.info(f"Retrying in {retry_delay} seconds...")
+#             time.sleep(retry_delay)
 
 
-def send_webhook(payload):
-    """
-    Send webhook in a background thread.
-    If configuration is not set or disabled, does nothing.
-    """
-    # Get configuration
-    config = _get_webhook_config()
+# def send_webhook(payload):
+#     """
+#     Send webhook in a background thread.
+#     If configuration is not set or disabled, does nothing.
+#     """
+#     # Get configuration
+#     config = _get_webhook_config()
     
-    # If no config or disabled, just return silently
-    if not config:
-        _logger.debug("Webhook not configured or disabled, skipping")
-        return
+#     # If no config or disabled, just return silently
+#     if not config:
+#         _logger.debug("Webhook not configured or disabled, skipping")
+#         return
     
-    # Sanitize payload
-    payload = sanitize(payload)
+#     # Sanitize payload
+#     payload = sanitize(payload)
     
-    _logger.info(f"Preparing to send webhook for model: {payload.get('model')}")
+#     _logger.info(f"Preparing to send webhook for model: {payload.get('model')}")
     
-    # Create log entry
-    log_id = _create_webhook_log(payload, config)
+#     # Create log entry
+#     log_id = _create_webhook_log(payload, config)
     
-    if not log_id:
-        _logger.error("Failed to create webhook log, aborting webhook send")
-        return
+#     if not log_id:
+#         _logger.error("Failed to create webhook log, aborting webhook send")
+#         return
     
-    _logger.info(f"Starting webhook worker thread for log_id: {log_id}")
+#     _logger.info(f"Starting webhook worker thread for log_id: {log_id}")
     
-    # Send in background thread
-    thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
-    thread.daemon = True
-    thread.start()
+#     # Send in background thread
+#     thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
+#     thread.daemon = True
+#     thread.start()
 
 
-def send_webhook_with_log(payload, log_id=None):
-    """Send webhook with existing log ID (for manual retry)"""
-    config = _get_webhook_config()
-    if not config:
-        return
+# def send_webhook_with_log(payload, log_id=None):
+#     """Send webhook with existing log ID (for manual retry)"""
+#     config = _get_webhook_config()
+#     if not config:
+#         return
     
-    payload = sanitize(payload)
-    thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
-    thread.daemon = True
-    thread.start()
+#     payload = sanitize(payload)
+#     thread = threading.Thread(target=_webhook_worker, args=(payload, config, log_id))
+#     thread.daemon = True
+#     thread.start()
 
 def get_sync_config():
     """Get the active sync app configuration"""
@@ -3384,110 +3384,110 @@ class PosSyncController(http.Controller):
         
 # Add this to your existing code
 
-class PurchaseOrder(models.Model):
-    _inherit = 'purchase.order'
+# class PurchaseOrder(models.Model):
+#     _inherit = 'purchase.order'
 
-    write_date = fields.Datetime(
-        'Last Updated on', index=True, help="Date on which the record was last updated.")
+#     write_date = fields.Datetime(
+#         'Last Updated on', index=True, help="Date on which the record was last updated.")
 
-    def button_confirm(self):
-        """Override confirm to send webhook when picking type is for Inventory App"""
-        result = super().button_confirm()
-        if result :
-            for order in self:
-                # Check if the picking type name matches "App" or your specific operation type
-                print("#$#$#$#$#$#$#$#$#$#$#$#$##$@")
-                print(order.picking_type_id.warehouse_id.name)
-                print(order.picking_type_id.warehouse_id.name)
-                config = get_sync_config()
-                if not config:
-                    return {'status': 'error', 'message': 'Sync App not configured'}
+#     def button_confirm(self):
+#         """Override confirm to send webhook when picking type is for Inventory App"""
+#         result = super().button_confirm()
+#         if result :
+#             for order in self:
+#                 # Check if the picking type name matches "App" or your specific operation type
+#                 print("#$#$#$#$#$#$#$#$#$#$#$#$##$@")
+#                 print(order.picking_type_id.warehouse_id.name)
+#                 print(order.picking_type_id.warehouse_id.name)
+#                 config = get_sync_config()
+#                 if not config:
+#                     return {'status': 'error', 'message': 'Sync App not configured'}
 
-                # The warehouse is already a record in config, no need to search again!
-                app_warehouse = config.app_warehouse_id
-                if not app_warehouse:
-                    return {'status': 'error', 'message': 'App warehouse not configured'}
+#                 # The warehouse is already a record in config, no need to search again!
+#                 app_warehouse = config.app_warehouse_id
+#                 if not app_warehouse:
+#                     return {'status': 'error', 'message': 'App warehouse not configured'}
 
-                # Now use it directly
-                warehouse_id = app_warehouse.id          # Get the ID
-                warehouse_name = app_warehouse.name      # Get the name
-                if order.picking_type_id and order.picking_type_id.warehouse_id.id == warehouse_id:
-                    print("********#### Found App Picking Type ####*************")
-                    print(f"PO: {order.name}, Picking Type: {order.picking_type_id.name}, WH: {order.picking_type_id.warehouse_id.name}")
-                    self._send_purchase_order_webhook(order)
+#                 # Now use it directly
+#                 warehouse_id = app_warehouse.id          # Get the ID
+#                 warehouse_name = app_warehouse.name      # Get the name
+#                 if order.picking_type_id and order.picking_type_id.warehouse_id.id == warehouse_id:
+#                     print("********#### Found App Picking Type ####*************")
+#                     print(f"PO: {order.name}, Picking Type: {order.picking_type_id.name}, WH: {order.picking_type_id.warehouse_id.name}")
+#                     self._send_purchase_order_webhook(order)
         
-        return result
+#         return result
 
-    def _send_purchase_order_webhook(self, order):
-        """Send purchase order details to webhook"""
+#     def _send_purchase_order_webhook(self, order):
+#         """Send purchase order details to webhook"""
         
-        # Prepare order lines data
-        order_lines = []
-        for line in order.order_line:
-            line_data = {
-                'id': line.id,
-                'product_id': line.product_id.id,
-                'product_name': line.product_id.name,
-                'product_barcode': line.product_id.barcode,
-                'product_code': line.product_id.default_code,
-                'quantity': line.product_qty,
-                'qty_received': line.qty_received,
-                'qty_to_receive': line.product_qty - line.qty_received,
-                'price_unit': line.price_unit,
-                'price_subtotal': line.price_subtotal,
-                'tax_ids': line.taxes_id.ids,
-                'uom_id': line.product_uom.id,
-                'uom_name': line.product_uom.name,
-            }
-            order_lines.append(line_data)
+#         # Prepare order lines data
+#         order_lines = []
+#         for line in order.order_line:
+#             line_data = {
+#                 'id': line.id,
+#                 'product_id': line.product_id.id,
+#                 'product_name': line.product_id.name,
+#                 'product_barcode': line.product_id.barcode,
+#                 'product_code': line.product_id.default_code,
+#                 'quantity': line.product_qty,
+#                 'qty_received': line.qty_received,
+#                 'qty_to_receive': line.product_qty - line.qty_received,
+#                 'price_unit': line.price_unit,
+#                 'price_subtotal': line.price_subtotal,
+#                 'tax_ids': line.taxes_id.ids,
+#                 'uom_id': line.product_uom.id,
+#                 'uom_name': line.product_uom.name,
+#             }
+#             order_lines.append(line_data)
         
-        # Prepare partner data
-        partner_data = {
-            'id': order.partner_id.id,
-            'name': order.partner_id.name,
-            'phone': order.partner_id.phone,
-            'email': order.partner_id.email,
-            'vat': order.partner_id.vat,
-        }
+#         # Prepare partner data
+#         partner_data = {
+#             'id': order.partner_id.id,
+#             'name': order.partner_id.name,
+#             'phone': order.partner_id.phone,
+#             'email': order.partner_id.email,
+#             'vat': order.partner_id.vat,
+#         }
         
-        # Prepare picking type data
-        picking_type_data = {
-            'id': order.picking_type_id.id,
-            'name': order.picking_type_id.name,
-            'warehouse_id': order.picking_type_id.warehouse_id.id if order.picking_type_id.warehouse_id else None,
-            'warehouse_name': order.picking_type_id.warehouse_id.name if order.picking_type_id.warehouse_id else None,
-        }
+#         # Prepare picking type data
+#         picking_type_data = {
+#             'id': order.picking_type_id.id,
+#             'name': order.picking_type_id.name,
+#             'warehouse_id': order.picking_type_id.warehouse_id.id if order.picking_type_id.warehouse_id else None,
+#             'warehouse_name': order.picking_type_id.warehouse_id.name if order.picking_type_id.warehouse_id else None,
+#         }
         
-        # Prepare main order data
-        order_data = {
-            'id': order.id,
-            'name': order.name,
-            'state': order.state,
-            'date_order': order.date_order.isoformat() if order.date_order else None,
-            'date_planned': order.date_planned.isoformat() if order.date_planned else None,
-            'partner_id': partner_data,
-            'picking_type_id': picking_type_data,
-            'amount_untaxed': order.amount_untaxed,
-            'amount_tax': order.amount_tax,
-            'amount_total': order.amount_total,
-            'currency_id': order.currency_id.id,
-            'currency_name': order.currency_id.name,
-            'order_lines': order_lines,
-            'notes': order.notes or ''
-        }
+#         # Prepare main order data
+#         order_data = {
+#             'id': order.id,
+#             'name': order.name,
+#             'state': order.state,
+#             'date_order': order.date_order.isoformat() if order.date_order else None,
+#             'date_planned': order.date_planned.isoformat() if order.date_planned else None,
+#             'partner_id': partner_data,
+#             'picking_type_id': picking_type_data,
+#             'amount_untaxed': order.amount_untaxed,
+#             'amount_tax': order.amount_tax,
+#             'amount_total': order.amount_total,
+#             'currency_id': order.currency_id.id,
+#             'currency_name': order.currency_id.name,
+#             'order_lines': order_lines,
+#             'notes': order.notes or ''
+#         }
         
-        payload = {
-            "operation": 6,  # Purchase Order Confirmed
-            "type": 5,  # Purchase Order type
-            "model": self._name,
-            "ids": [order.id],
-            "data": order_data
-        }
+#         payload = {
+#             "operation": 6,  # Purchase Order Confirmed
+#             "type": 5,  # Purchase Order type
+#             "model": self._name,
+#             "ids": [order.id],
+#             "data": order_data
+#         }
         
-        print("***************$$$$$ PURCHASE ORDER WEBHOOK $$$$$**************")
-        print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
+#         # print("***************$$$$$ PURCHASE ORDER WEBHOOK $$$$$**************")
+#         # print(json.dumps(sanitize(payload), indent=4, ensure_ascii=False))
         
-        send_webhook(payload)
+#         # send_webhook(payload)
 
 
 class PurchaseOrderReceivingController(http.Controller):
@@ -4210,7 +4210,7 @@ class StockReceivingController(http.Controller):
     def get_receipt_sync(self, **kwargs):
         """
         Get all incoming stock receipts to App warehouse changed since last sync.
-        Returns created, updated, and validated receipts (including purchase order receipts).
+        Returns created, updated, and validated receipts (EXCLUDING purchase order receipts).
         
         Request:
         GET /api/sync/receipt
@@ -4312,6 +4312,14 @@ class StockReceivingController(http.Controller):
 
                     WHERE sw.id = %s
                     AND spt.code = 'incoming'
+                    AND sp.state IN ('assigned', 'cancel')
+                    AND (
+                        sp.origin IS NULL 
+                        OR (
+                            sp.origin NOT ILIKE 'P0%%'
+                            AND sp.origin NOT ILIKE 'PO%%'
+                        )
+                    )
                     AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
                     ORDER BY sp.id, sm.id;
                 """
@@ -4324,7 +4332,7 @@ class StockReceivingController(http.Controller):
                     last_sync, last_sync, last_sync  # date filters
                 ))
             else:
-                # First sync - get all incoming receipts (including PO receipts)
+                # First sync - get all incoming receipts (excluding PO receipts)
                 query = """
                     SELECT
                         sp.id AS picking_id,
@@ -4364,7 +4372,11 @@ class StockReceivingController(http.Controller):
                         uom.id AS uom_id,
                         COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
                         
-                        'created' AS change_type
+                        -- Change type
+                        CASE 
+                            WHEN sp.state = 'cancel' THEN 'cancelled'
+                            WHEN sp.state = 'assigned' THEN 'ready'
+                        END AS change_type
 
                     FROM stock_picking sp
                     LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
@@ -4377,6 +4389,14 @@ class StockReceivingController(http.Controller):
 
                     WHERE sw.id = %s
                     AND spt.code = 'incoming'
+                    AND sp.state IN ('assigned', 'cancel')
+                    AND (
+                        sp.origin IS NULL 
+                        OR (
+                            sp.origin NOT ILIKE 'P0%%'
+                            AND sp.origin NOT ILIKE 'PO%%'
+                        )
+                    )
                     ORDER BY sp.id, sm.id;
                 """
                 request.env.cr.execute(query, (warehouse_id,))
@@ -4445,10 +4465,12 @@ class StockReceivingController(http.Controller):
                 change_type = picking_data.pop('change_type')
                 
                 # Operation codes
-                if change_type == 'created':
+                if change_type == 'created' or change_type == 'ready':
                     operation = 0
                 elif change_type == 'validated':
                     operation = 3
+                elif change_type == 'cancelled':
+                    operation = 2
                 else:
                     operation = 1
                 
@@ -4460,10 +4482,12 @@ class StockReceivingController(http.Controller):
                     'data': picking_data
                 }
 
-                if change_type == 'created':
+                if change_type == 'created' or change_type == 'ready':
                     created.append(payload)
                 elif change_type == 'validated':
                     validated.append(payload)
+                elif change_type == 'cancelled':
+                    updated.append(payload)
                 else:
                     updated.append(payload)
 
@@ -4512,6 +4536,11 @@ class StockReceivingController(http.Controller):
     def receive_stock_picking(self, **kwargs):
         """
         API to receive stock picking items
+        - Allows receiving MORE than the ordered quantity (over-receiving)
+        - Does NOT create backorders
+        - Sets all non-received lines to zero
+        - Checks origin picking state for cancelled transfers
+        
         Expected payload:
         {
             "picking_name": "WH/IN/00123",
@@ -4532,8 +4561,8 @@ class StockReceivingController(http.Controller):
 
         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
             return request.make_json_response({
-                'error': 'Unauthorized or token expired',
-                'status': 401
+                'status': 'error',
+                'message': 'Unauthorized or token expired'
             }, status=401)
 
         try:
@@ -4574,8 +4603,8 @@ class StockReceivingController(http.Controller):
             # Check if picking is already validated
             if picking.state == 'done':
                 return request.make_json_response({
-                    'status': 'success',
-                    'message': 'Stock picking already validated',
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is already validated',
                     'picking': {
                         'id': picking.id,
                         'name': picking.name,
@@ -4584,15 +4613,71 @@ class StockReceivingController(http.Controller):
                     }
                 })
 
-            # STEP 1: Validate all quantities BEFORE processing
+            # Check if picking is in draft state
+            if picking.state == 'draft':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is in draft state. Please confirm it first.'
+                })
+
+            # Check if picking is waiting
+            if picking.state == 'waiting':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is waiting for another operation'
+                })
+
+            # Check if picking is confirmed but not ready
+            if picking.state == 'confirmed':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is confirmed but not ready (waiting for stock availability)'
+                })
+
+            # ============================================================
+            # CHECK ORIGIN STATE (for transfers from other warehouses)
+            # ============================================================
+            origin = picking.origin
+            origin_picking = None
+            origin_state = None
+            
+            if origin:
+                # Check if origin is a picking reference (e.g., WH/OUT/00019)
+                origin_picking = request.env['stock.picking'].sudo().search([
+                    ('name', '=', origin)
+                ], limit=1)
+                
+                if origin_picking:
+                    origin_state = origin_picking.state
+                    
+                    # If origin picking is cancelled, block receiving
+                    if origin_state == 'cancel':
+                        return request.make_json_response({
+                            'status': 'error',
+                            'message': f'Cannot receive: Origin transfer {origin} has been cancelled',
+                            'origin_picking': {
+                                'id': origin_picking.id,
+                                'name': origin_picking.name,
+                                'state': origin_state
+                            }
+                        })
+
+            # ============================================================
+            # STEP 1: Validate lines (allow over-receiving)
+            # ============================================================
             validation_errors = []
+            over_receive_warnings = []
+            
+            # Create a set of move_ids from the request for quick lookup
+            received_move_ids = set()
             
             for line_data in lines_to_receive:
                 move_id = line_data.get('move_id')
                 qty_to_receive = line_data.get('qty_received', 0)
 
+                # Only reject if quantity is zero or negative
                 if qty_to_receive <= 0:
-                    validation_errors.append(f'Move {move_id}: Invalid quantity {qty_to_receive}')
+                    validation_errors.append(f'Move {move_id}: Invalid quantity {qty_to_receive} (must be greater than 0)')
                     continue
 
                 # Find the stock move
@@ -4605,13 +4690,18 @@ class StockReceivingController(http.Controller):
                     validation_errors.append(f'Move {move_id}: Not found in picking {picking_name}')
                     continue
 
-                # Check if qty exceeds ordered quantity
-                remaining_qty = move.product_uom_qty - move.quantity_done
-                if qty_to_receive > remaining_qty:
-                    validation_errors.append(
-                        f'Move {move_id} ({move.product_id.name}): '
-                        f'Quantity to receive ({qty_to_receive}) exceeds remaining quantity ({remaining_qty})'
-                    )
+                received_move_ids.add(move_id)
+
+                # Check if qty exceeds ordered quantity (warning only, not error)
+                if qty_to_receive > move.product_uom_qty:
+                    over_receive_warnings.append({
+                        'move_id': move_id,
+                        'product_name': move.product_id.name,
+                        'ordered_qty': move.product_uom_qty,
+                        'already_received': move.quantity_done,
+                        'qty_to_receive': qty_to_receive,
+                        'over_qty': qty_to_receive - move.product_uom_qty
+                    })
 
             # If any validation errors, return immediately without processing
             if validation_errors:
@@ -4621,8 +4711,20 @@ class StockReceivingController(http.Controller):
                     'errors': validation_errors
                 })
 
-            # STEP 2: Process the receipt (all validations passed)
+            # ============================================================
+            # STEP 2: Set ALL move lines to zero first
+            # ============================================================
+            for move in picking.move_ids:
+                move.write({'quantity_done': 0})
+                # Also reset move_line_ids (detailed operations)
+                for move_line in move.move_line_ids:
+                    move_line.write({'qty_done': 0})
+
+            # ============================================================
+            # STEP 3: Process only the received lines
+            # ============================================================
             received_lines = []
+            not_received_lines = []
 
             for line_data in lines_to_receive:
                 move_id = line_data.get('move_id')
@@ -4633,6 +4735,12 @@ class StockReceivingController(http.Controller):
                     ('picking_id', '=', picking.id)
                 ], limit=1)
 
+                if not move:
+                    continue
+
+                # Check if over-receiving
+                is_over_receive = qty_to_receive > move.product_uom_qty
+                
                 # Set the quantity done
                 move.write({'quantity_done': qty_to_receive})
                 
@@ -4641,19 +4749,70 @@ class StockReceivingController(http.Controller):
                     'product_id': move.product_id.id,
                     'product_name': move.product_id.name,
                     'product_barcode': move.product_id.barcode,
-                    'qty_received': qty_to_receive
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_received': qty_to_receive,
+                    'is_over_receive': is_over_receive,
+                    'over_qty': qty_to_receive - move.product_uom_qty if is_over_receive else 0
                 })
 
-            # STEP 3: Validate the picking
+            # Collect non-received lines info
+            for move in picking.move_ids:
+                if move.id not in received_move_ids:
+                    not_received_lines.append({
+                        'move_id': move.id,
+                        'product_id': move.product_id.id,
+                        'product_name': move.product_id.name,
+                        'product_barcode': move.product_id.barcode,
+                        'qty_ordered': move.product_uom_qty,
+                        'qty_received': 0,
+                        'is_over_receive': False,
+                        'over_qty': 0
+                    })
+
+            # ============================================================
+            # STEP 4: Validate the picking (NO BACKORDER)
+            # ============================================================
             try:
-                # Use _action_done which is the core validation method
-                picking._action_done()
+                # Use context to skip backorder creation
+                picking_with_context = picking.with_context(
+                    skip_backorder=True,
+                    picking_ids_not_to_backorder=picking.ids,
+                    cancel_backorder=True
+                )
+                
+                # Try button_validate first (handles wizards)
+                result = picking_with_context.button_validate()
+                
+                # Handle backorder wizard if it appears
+                if isinstance(result, dict) and result.get('res_model') == 'stock.backorder.confirmation':
+                    # Get the wizard and process without backorder
+                    backorder_wizard = request.env['stock.backorder.confirmation'].sudo().browse(result.get('res_id'))
+                    if backorder_wizard.exists():
+                        backorder_wizard.process_cancel_backorder()
+                
+                # Handle immediate transfer wizard if it appears
+                elif isinstance(result, dict) and result.get('res_model') == 'stock.immediate.transfer':
+                    immediate_wizard = request.env['stock.immediate.transfer'].sudo().browse(result.get('res_id'))
+                    if immediate_wizard.exists():
+                        immediate_wizard.process()
+                
+                # Refresh picking state
+                picking.invalidate_recordset()
+                
+                # Check if validation was successful
+                if picking.state != 'done':
+                    return request.make_json_response({
+                        'status': 'error',
+                        'message': f'Failed to validate receipt {picking.name}. Current state: {picking.state}'
+                    })
                 
                 validated_picking = {
                     'id': picking.id,
                     'name': picking.name,
                     'state': picking.state,
-                    'date_done': picking.date_done.isoformat() if picking.date_done else None
+                    'date_done': picking.date_done.isoformat() if picking.date_done else None,
+                    'origin': origin,
+                    'origin_state': origin_state
                 }
                 
             except Exception as e:
@@ -4663,15 +4822,42 @@ class StockReceivingController(http.Controller):
                     'message': f'Failed to validate receipt {picking.name}: {str(e)}'
                 })
 
-            return request.make_json_response({
+            # ============================================================
+            # Build response (ONLY SUCCESS CASE - new validation)
+            # ============================================================
+            response = {
                 'status': 'success',
+                'message': f'Stock picking {picking.name} validated successfully',
                 'picking': validated_picking,
                 'received_lines': received_lines,
+                'not_received_lines': not_received_lines,
                 'summary': {
-                    'total_lines': len(received_lines),
-                    'picking_validated': True
+                    'total_lines': len(picking.move_ids),
+                    'received_lines_count': len(received_lines),
+                    'not_received_lines_count': len(not_received_lines),
+                    'picking_validated': True,
+                    'has_over_receives': len(over_receive_warnings) > 0,
+                    'over_receive_count': len(over_receive_warnings),
+                    'backorder_created': False
                 }
-            })
+            }
+
+            # Add warnings if any over-receiving occurred
+            if over_receive_warnings:
+                response['warnings'] = {
+                    'message': 'Some items were received in quantities greater than ordered',
+                    'over_received_items': over_receive_warnings
+                }
+
+            # Add origin info if exists
+            if origin_picking:
+                response['origin_picking'] = {
+                    'id': origin_picking.id,
+                    'name': origin_picking.name,
+                    'state': origin_state
+                }
+
+            return request.make_json_response(response)
 
         except Exception as e:
             _logger.exception("Failed to receive stock picking items")
@@ -4679,6 +4865,648 @@ class StockReceivingController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             })
+
+    @http.route('/api/sync/delivery', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_delivery_sync(self, **kwargs):
+        """
+        Get all outgoing stock deliveries from App warehouse changed since last sync.
+        Returns ready (assigned) and cancelled deliveries only.
+        
+        Request:
+        GET /api/sync/delivery
+        Headers: Authorization: your-token
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+
+        try:
+            # Get sync config for warehouse filter
+            config = request.env['sync.app.config'].sudo().search([], limit=1)
+            if not config:
+                return request.make_response(
+                    json.dumps({'error': 'Sync App not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            app_warehouse = config.app_warehouse_id
+            if not app_warehouse:
+                return request.make_response(
+                    json.dumps({'error': 'App warehouse not configured', 'success': False}),
+                    headers=[('Content-Type', 'application/json')],
+                    status=400
+                )
+
+            warehouse_id = app_warehouse.id
+
+            # Get sync tracker
+            sync_record = request.env['sync.update'].sudo().get_sync_record()
+            last_sync = sync_record.last_delivery_sync
+            current_time = datetime.utcnow()
+
+            # Build the query
+            if last_sync:
+                query = """
+                    SELECT
+                        sp.id AS picking_id,
+                        sp.name AS picking_name,
+                        sp.state AS picking_state,
+                        sp.origin,
+                        sp.scheduled_date,
+                        sp.date_done,
+                        sp.create_date AS picking_create_date,
+                        sp.write_date AS picking_write_date,
+                        
+                        -- Picking Type & Warehouse
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Partner (Customer)
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        
+                        -- Stock Move
+                        sm.id AS move_id,
+                        sm.product_uom_qty AS quantity_ordered,
+                        sm.quantity_done,
+                        sm.state AS move_state,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        -- Change type (only assigned and cancel)
+                        CASE 
+                            WHEN sp.state = 'cancel' THEN 'cancelled'
+                            WHEN sp.state = 'assigned' AND sp.create_date > %s THEN 'created'
+                            WHEN sp.state = 'assigned' AND sp.write_date > %s AND sp.create_date <= %s THEN 'updated'
+                            WHEN sp.state = 'assigned' THEN 'ready'
+                        END AS change_type
+
+                    FROM stock_picking sp
+                    LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+                    LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+                    LEFT JOIN product_product pp ON pp.id = sm.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+
+                    WHERE sw.id = %s
+                    AND spt.code = 'outgoing'
+                    AND sp.state IN ('assigned', 'cancel')
+                    AND (sp.create_date > %s OR sp.write_date > %s)
+                    ORDER BY sp.id, sm.id;
+                """
+                request.env.cr.execute(query, (
+                    last_sync,  # created check
+                    last_sync, last_sync,  # updated check
+                    warehouse_id,  # warehouse filter
+                    last_sync, last_sync  # date filters
+                ))
+            else:
+                # First sync - get all outgoing deliveries (assigned and cancel only)
+                query = """
+                    SELECT
+                        sp.id AS picking_id,
+                        sp.name AS picking_name,
+                        sp.state AS picking_state,
+                        sp.origin,
+                        sp.scheduled_date,
+                        sp.date_done,
+                        sp.create_date AS picking_create_date,
+                        sp.write_date AS picking_write_date,
+                        
+                        -- Picking Type & Warehouse
+                        spt.id AS picking_type_id,
+                        spt.name AS picking_type_name,
+                        sw.id AS warehouse_id,
+                        sw.name AS warehouse_name,
+                        
+                        -- Partner (Customer)
+                        rp.id AS partner_id,
+                        rp.name AS partner_name,
+                        rp.phone AS partner_phone,
+                        rp.email AS partner_email,
+                        
+                        -- Stock Move
+                        sm.id AS move_id,
+                        sm.product_uom_qty AS quantity_ordered,
+                        sm.quantity_done,
+                        sm.state AS move_state,
+                        
+                        -- Product
+                        pp.id AS product_id,
+                        COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+                        pp.barcode AS product_barcode,
+                        pp.default_code AS product_code,
+                        
+                        -- UOM
+                        uom.id AS uom_id,
+                        COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+                        
+                        -- Change type (only assigned and cancel)
+                        CASE 
+                            WHEN sp.state = 'cancel' THEN 'cancelled'
+                            WHEN sp.state = 'assigned' THEN 'ready'
+                        END AS change_type
+
+                    FROM stock_picking sp
+                    LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+                    LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+                    LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+                    LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+                    LEFT JOIN product_product pp ON pp.id = sm.product_id
+                    LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                    LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+
+                    WHERE sw.id = %s
+                    AND spt.code = 'outgoing'
+                    AND sp.state IN ('assigned', 'cancel')
+                    ORDER BY sp.id, sm.id;
+                """
+                request.env.cr.execute(query, (warehouse_id,))
+
+            raw_results = request.env.cr.dictfetchall()
+
+            # Group results by picking_id
+            pickings_dict = {}
+            for row in raw_results:
+                picking_id = row['picking_id']
+                
+                if picking_id not in pickings_dict:
+                    # Partner data (Customer)
+                    partner_data = None
+                    if row.get('partner_id'):
+                        partner_data = {
+                            'id': row['partner_id'],
+                            'name': row['partner_name'],
+                            'phone': row['partner_phone'],
+                            'email': row['partner_email'],
+                        }
+                    
+                    # Initialize picking data
+                    pickings_dict[picking_id] = {
+                        'id': picking_id,
+                        'name': row['picking_name'],
+                        'state': row['picking_state'],
+                        'origin': row['origin'],
+                        'scheduled_date': row['scheduled_date'].isoformat() if row['scheduled_date'] else None,
+                        'date_done': row['date_done'].isoformat() if row['date_done'] else None,
+                        'create_date': row['picking_create_date'].isoformat() if row['picking_create_date'] else None,
+                        'partner': partner_data,
+                        'warehouse_id': row['warehouse_id'],
+                        'warehouse_name': row['warehouse_name'],
+                        'picking_type_name': row['picking_type_name'],
+                        'move_lines': [],
+                        'change_type': row['change_type'],
+                    }
+                
+                # Add move line
+                if row.get('move_id'):
+                    quantity_ordered = float(row['quantity_ordered']) if row['quantity_ordered'] else 0.0
+                    quantity_done = float(row['quantity_done']) if row['quantity_done'] else 0.0
+                    
+                    move_data = {
+                        'id': row['move_id'],
+                        'product_id': row['product_id'],
+                        'product_name': row['product_name'],
+                        'product_barcode': row['product_barcode'],
+                        'product_code': row['product_code'],
+                        'quantity_ordered': quantity_ordered,
+                        'quantity_done': quantity_done,
+                        'quantity_remaining': quantity_ordered - quantity_done,
+                        'uom_id': row['uom_id'],
+                        'uom_name': row['uom_name'],
+                        'state': row['move_state'],
+                    }
+                    pickings_dict[picking_id]['move_lines'].append(move_data)
+
+            # Format results (only ready and cancelled - no validated)
+            ready = []
+            cancelled = []
+
+            for picking_id, picking_data in pickings_dict.items():
+                change_type = picking_data.pop('change_type')
+                
+                # Operation codes
+                if change_type == 'created' or change_type == 'ready' or change_type == 'updated':
+                    operation = 0  # Ready to deliver
+                elif change_type == 'cancelled':
+                    operation = 2  # Cancelled
+                else:
+                    operation = 1  # Updated
+                
+                payload = {
+                    'operation': operation,
+                    'type': 8,  # Type 8 for deliveries
+                    'model': 'stock.picking',
+                    'ids': [picking_id],
+                    'data': picking_data
+                }
+
+                if change_type == 'cancelled':
+                    cancelled.append(payload)
+                else:
+                    ready.append(payload)
+
+            # Update last sync time
+            sync_record.sudo().write({'last_delivery_sync': current_time})
+
+            # Build response
+            response = {
+                'success': True,
+                'warehouse': {
+                    'id': warehouse_id,
+                    'name': app_warehouse.name,
+                },
+                'last_sync_time': last_sync.isoformat() if last_sync else None,
+                'current_sync_time': current_time.isoformat(),
+                'changes': {
+                    'ready': ready,
+                    'cancelled': cancelled
+                },
+                'summary': {
+                    'total_changes': len(ready) + len(cancelled),
+                    'ready_count': len(ready),
+                    'cancelled_count': len(cancelled)
+                }
+            }
+
+            return request.make_response(
+                json.dumps(response, default=str, ensure_ascii=False),
+                headers=[('Content-Type', 'application/json')],
+                status=200
+            )
+
+        except Exception as e:
+            _logger.exception("Failed to fetch stock delivery sync data")
+            return request.make_response(
+                json.dumps({'error': str(e), 'success': False}),
+                headers=[('Content-Type', 'application/json')],
+                status=500
+            )   
+
+
+
+    @http.route('/api/stock/delivery', type='http', auth='public', methods=['POST'], csrf=False)
+    def deliver_stock_picking(self, **kwargs):
+        """
+        API to deliver/confirm stock picking items (outgoing)
+        - Does NOT allow delivering MORE than the ordered quantity
+        - Does NOT create backorders
+        - Sets all non-delivered lines to zero
+        - Checks origin state for cancelled orders
+        
+        Expected payload:
+        {
+            "picking_name": "WH/OUT/00123",
+            "lines": [
+                {
+                    "move_id": 1,
+                    "qty_delivered": 10.0
+                },
+                {
+                    "move_id": 2,
+                    "qty_delivered": 5.0
+                }
+            ]
+        }
+        """
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_json_response({
+                'status': 'error',
+                'message': 'Unauthorized or token expired'
+            }, status=401)
+
+        try:
+            data = json.loads(request.httprequest.data)
+            picking_name = data.get('picking_name')
+            lines_to_deliver = data.get('lines', [])
+
+            if not picking_name:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'Stock picking name is required'
+                })
+
+            if not lines_to_deliver:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'No lines to deliver'
+                })
+
+            # Find the stock picking
+            picking = request.env['stock.picking'].sudo().search([
+                ('name', '=', picking_name)
+            ], limit=1)
+
+            if not picking:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} not found'
+                })
+
+            # Verify it's an outgoing picking
+            if picking.picking_type_id.code != 'outgoing':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is not an outgoing delivery'
+                })
+
+            # Check if picking is cancelled
+            if picking.state == 'cancel':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is cancelled'
+                })
+
+            # Check if picking is already validated
+            if picking.state == 'done':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is already validated',
+                    'picking': {
+                        'id': picking.id,
+                        'name': picking.name,
+                        'state': picking.state,
+                        'date_done': picking.date_done.isoformat() if picking.date_done else None
+                    }
+                })
+
+            # Check if picking is in draft state
+            if picking.state == 'draft':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is in draft state. Please confirm it first.'
+                })
+
+            # Check if picking is waiting
+            if picking.state == 'waiting':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is waiting for another operation'
+                })
+
+            # Check if picking is confirmed but not ready
+            if picking.state == 'confirmed':
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Stock picking {picking_name} is confirmed but not ready (waiting for stock availability)'
+                })
+
+            # ============================================================
+            # CHECK ORIGIN STATE (for sales orders, purchase returns, etc.)
+            # ============================================================
+            origin = picking.origin
+            origin_order = None
+            origin_state = None
+            
+            if origin:
+                # Check if origin is a Sale Order (e.g., S00019)
+                sale_order = request.env['sale.order'].sudo().search([
+                    ('name', '=', origin)
+                ], limit=1)
+                
+                if sale_order:
+                    origin_order = sale_order
+                    origin_state = sale_order.state
+                    
+                    # If sale order is cancelled, block delivery
+                    if origin_state == 'cancel':
+                        return request.make_json_response({
+                            'status': 'error',
+                            'message': f'Cannot deliver: Origin sale order {origin} has been cancelled',
+                            'origin_order': {
+                                'id': sale_order.id,
+                                'name': sale_order.name,
+                                'state': origin_state
+                            }
+                        })
+                
+                # Check if origin is a picking reference (e.g., for returns)
+                origin_picking = request.env['stock.picking'].sudo().search([
+                    ('name', '=', origin)
+                ], limit=1)
+                
+                if origin_picking:
+                    origin_state = origin_picking.state
+                    
+                    # If origin picking is cancelled, block delivery
+                    if origin_state == 'cancel':
+                        return request.make_json_response({
+                            'status': 'error',
+                            'message': f'Cannot deliver: Origin transfer {origin} has been cancelled',
+                            'origin_picking': {
+                                'id': origin_picking.id,
+                                'name': origin_picking.name,
+                                'state': origin_state
+                            }
+                        })
+
+            # ============================================================
+            # STEP 1: Validate lines (NO over-delivering allowed)
+            # ============================================================
+            validation_errors = []
+            
+            # Create a set of move_ids from the request for quick lookup
+            delivered_move_ids = set()
+            
+            for line_data in lines_to_deliver:
+                move_id = line_data.get('move_id')
+                qty_to_deliver = line_data.get('qty_delivered', 0)
+
+                # Reject if quantity is zero or negative
+                if qty_to_deliver <= 0:
+                    validation_errors.append(f'Move {move_id}: Invalid quantity {qty_to_deliver} (must be greater than 0)')
+                    continue
+
+                # Find the stock move
+                move = request.env['stock.move'].sudo().search([
+                    ('id', '=', move_id),
+                    ('picking_id', '=', picking.id)
+                ], limit=1)
+
+                if not move:
+                    validation_errors.append(f'Move {move_id}: Not found in picking {picking_name}')
+                    continue
+
+                delivered_move_ids.add(move_id)
+
+                # Check if qty exceeds ordered quantity (ERROR - not allowed)
+                if qty_to_deliver > move.product_uom_qty:
+                    validation_errors.append(
+                        f'Move {move_id} ({move.product_id.name}): '
+                        f'Quantity to deliver ({qty_to_deliver}) exceeds ordered quantity ({move.product_uom_qty})'
+                    )
+
+            # If any validation errors, return immediately without processing
+            if validation_errors:
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': 'Validation failed',
+                    'errors': validation_errors
+                })
+
+            # ============================================================
+            # STEP 2: Set ALL move lines to zero first
+            # ============================================================
+            for move in picking.move_ids:
+                move.write({'quantity_done': 0})
+                # Also reset move_line_ids (detailed operations)
+                for move_line in move.move_line_ids:
+                    move_line.write({'qty_done': 0})
+
+            # ============================================================
+            # STEP 3: Process only the delivered lines
+            # ============================================================
+            delivered_lines = []
+            not_delivered_lines = []
+
+            for line_data in lines_to_deliver:
+                move_id = line_data.get('move_id')
+                qty_to_deliver = line_data.get('qty_delivered')
+
+                move = request.env['stock.move'].sudo().search([
+                    ('id', '=', move_id),
+                    ('picking_id', '=', picking.id)
+                ], limit=1)
+
+                if not move:
+                    continue
+
+                # Set the quantity done
+                move.write({'quantity_done': qty_to_deliver})
+                
+                delivered_lines.append({
+                    'move_id': move_id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'qty_ordered': move.product_uom_qty,
+                    'qty_delivered': qty_to_deliver
+                })
+
+            # Collect non-delivered lines info
+            for move in picking.move_ids:
+                if move.id not in delivered_move_ids:
+                    not_delivered_lines.append({
+                        'move_id': move.id,
+                        'product_id': move.product_id.id,
+                        'product_name': move.product_id.name,
+                        'product_barcode': move.product_id.barcode,
+                        'qty_ordered': move.product_uom_qty,
+                        'qty_delivered': 0
+                    })
+
+            # ============================================================
+            # STEP 4: Validate the picking (NO BACKORDER)
+            # ============================================================
+            try:
+                # Use context to skip backorder creation
+                picking_with_context = picking.with_context(
+                    skip_backorder=True,
+                    picking_ids_not_to_backorder=picking.ids,
+                    cancel_backorder=True
+                )
+                
+                # Try button_validate first (handles wizards)
+                result = picking_with_context.button_validate()
+                
+                # Handle backorder wizard if it appears
+                if isinstance(result, dict) and result.get('res_model') == 'stock.backorder.confirmation':
+                    # Get the wizard and process without backorder
+                    backorder_wizard = request.env['stock.backorder.confirmation'].sudo().browse(result.get('res_id'))
+                    if backorder_wizard.exists():
+                        backorder_wizard.process_cancel_backorder()
+                
+                # Handle immediate transfer wizard if it appears
+                elif isinstance(result, dict) and result.get('res_model') == 'stock.immediate.transfer':
+                    immediate_wizard = request.env['stock.immediate.transfer'].sudo().browse(result.get('res_id'))
+                    if immediate_wizard.exists():
+                        immediate_wizard.process()
+                
+                # Refresh picking state
+                picking.invalidate_recordset()
+                
+                # Check if validation was successful
+                if picking.state != 'done':
+                    return request.make_json_response({
+                        'status': 'error',
+                        'message': f'Failed to validate delivery {picking.name}. Current state: {picking.state}'
+                    })
+                
+                validated_picking = {
+                    'id': picking.id,
+                    'name': picking.name,
+                    'state': picking.state,
+                    'date_done': picking.date_done.isoformat() if picking.date_done else None,
+                    'origin': origin,
+                    'origin_state': origin_state
+                }
+                
+            except Exception as e:
+                _logger.exception(f"Failed to validate picking {picking.name}")
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': f'Failed to validate delivery {picking.name}: {str(e)}'
+                })
+
+            # ============================================================
+            # Build response (ONLY SUCCESS CASE - new validation)
+            # ============================================================
+            response = {
+                'status': 'success',
+                'message': f'Stock picking {picking.name} delivered successfully',
+                'picking': validated_picking,
+                'delivered_lines': delivered_lines,
+                'not_delivered_lines': not_delivered_lines,
+                'summary': {
+                    'total_lines': len(picking.move_ids),
+                    'delivered_lines_count': len(delivered_lines),
+                    'not_delivered_lines_count': len(not_delivered_lines),
+                    'picking_validated': True,
+                    'backorder_created': False
+                }
+            }
+
+            # Add origin info if exists
+            if origin_order:
+                response['origin_order'] = {
+                    'id': origin_order.id,
+                    'name': origin_order.name,
+                    'state': origin_state
+                }
+
+            return request.make_json_response(response)
+
+        except Exception as e:
+            _logger.exception("Failed to deliver stock picking items")
+            return request.make_json_response({
+                'status': 'error',
+                'message': str(e)
+            })           
 
     # @http.route('/api/stock/receive/single', type='json', auth='public', methods=['POST'])
     # def receive_single_line(self):
