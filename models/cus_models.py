@@ -4536,7 +4536,7 @@ class StockReceivingController(http.Controller):
     def receive_stock_picking(self, **kwargs):
         """
         API to receive stock picking items
-        - Allows receiving MORE than the ordered quantity (over-receiving)
+        - Does NOT allow receiving more than the ordered quantity
         - Does NOT create backorders
         - Sets all non-received lines to zero
         - Checks origin picking state for cancelled transfers
@@ -4663,10 +4663,9 @@ class StockReceivingController(http.Controller):
                         })
 
             # ============================================================
-            # STEP 1: Validate lines (allow over-receiving)
+            # STEP 1: Validate lines (PREVENT over-receiving)
             # ============================================================
             validation_errors = []
-            over_receive_warnings = []
             
             # Create a set of move_ids from the request for quick lookup
             received_move_ids = set()
@@ -4675,7 +4674,7 @@ class StockReceivingController(http.Controller):
                 move_id = line_data.get('move_id')
                 qty_to_receive = line_data.get('qty_received', 0)
 
-                # Only reject if quantity is zero or negative
+                # Reject if quantity is zero or negative
                 if qty_to_receive <= 0:
                     validation_errors.append(f'Move {move_id}: Invalid quantity {qty_to_receive} (must be greater than 0)')
                     continue
@@ -4692,16 +4691,13 @@ class StockReceivingController(http.Controller):
 
                 received_move_ids.add(move_id)
 
-                # Check if qty exceeds ordered quantity (warning only, not error)
+                # PREVENT over-receiving - reject if quantity exceeds ordered quantity
                 if qty_to_receive > move.product_uom_qty:
-                    over_receive_warnings.append({
-                        'move_id': move_id,
-                        'product_name': move.product_id.name,
-                        'ordered_qty': move.product_uom_qty,
-                        'already_received': move.quantity_done,
-                        'qty_to_receive': qty_to_receive,
-                        'over_qty': qty_to_receive - move.product_uom_qty
-                    })
+                    validation_errors.append(
+                        f'Move {move_id} ({move.product_id.name}): '
+                        f'Cannot receive {qty_to_receive} - exceeds ordered quantity of {move.product_uom_qty}'
+                    )
+                    continue
 
             # If any validation errors, return immediately without processing
             if validation_errors:
@@ -4737,9 +4733,6 @@ class StockReceivingController(http.Controller):
 
                 if not move:
                     continue
-
-                # Check if over-receiving
-                is_over_receive = qty_to_receive > move.product_uom_qty
                 
                 # Set the quantity done
                 move.write({'quantity_done': qty_to_receive})
@@ -4750,9 +4743,7 @@ class StockReceivingController(http.Controller):
                     'product_name': move.product_id.name,
                     'product_barcode': move.product_id.barcode,
                     'qty_ordered': move.product_uom_qty,
-                    'qty_received': qty_to_receive,
-                    'is_over_receive': is_over_receive,
-                    'over_qty': qty_to_receive - move.product_uom_qty if is_over_receive else 0
+                    'qty_received': qty_to_receive
                 })
 
             # Collect non-received lines info
@@ -4764,9 +4755,7 @@ class StockReceivingController(http.Controller):
                         'product_name': move.product_id.name,
                         'product_barcode': move.product_id.barcode,
                         'qty_ordered': move.product_uom_qty,
-                        'qty_received': 0,
-                        'is_over_receive': False,
-                        'over_qty': 0
+                        'qty_received': 0
                     })
 
             # ============================================================
@@ -4823,7 +4812,7 @@ class StockReceivingController(http.Controller):
                 })
 
             # ============================================================
-            # Build response (ONLY SUCCESS CASE - new validation)
+            # Build response (ONLY SUCCESS CASE)
             # ============================================================
             response = {
                 'status': 'success',
@@ -4836,18 +4825,9 @@ class StockReceivingController(http.Controller):
                     'received_lines_count': len(received_lines),
                     'not_received_lines_count': len(not_received_lines),
                     'picking_validated': True,
-                    'has_over_receives': len(over_receive_warnings) > 0,
-                    'over_receive_count': len(over_receive_warnings),
                     'backorder_created': False
                 }
             }
-
-            # Add warnings if any over-receiving occurred
-            if over_receive_warnings:
-                response['warnings'] = {
-                    'message': 'Some items were received in quantities greater than ordered',
-                    'over_received_items': over_receive_warnings
-                }
 
             # Add origin info if exists
             if origin_picking:
@@ -4866,14 +4846,14 @@ class StockReceivingController(http.Controller):
                 'message': str(e)
             })
 
-    @http.route('/api/sync/delivery', type='http', auth='none', methods=['GET'], csrf=False)
+    @http.route('/api/sync/out', type='http', auth='none', methods=['GET'], csrf=False)
     def get_delivery_sync(self, **kwargs):
         """
         Get all outgoing stock deliveries from App warehouse changed since last sync.
         Returns ready (assigned) and cancelled deliveries only.
         
         Request:
-        GET /api/sync/delivery
+        GET /api/sync/out
         Headers: Authorization: your-token
         """
         # Check token
@@ -5167,7 +5147,7 @@ class StockReceivingController(http.Controller):
 
 
 
-    @http.route('/api/stock/delivery', type='http', auth='public', methods=['POST'], csrf=False)
+    @http.route('/api/stock/out', type='http', auth='public', methods=['POST'], csrf=False)
     def deliver_stock_picking(self, **kwargs):
         """
         API to deliver/confirm stock picking items (outgoing)
