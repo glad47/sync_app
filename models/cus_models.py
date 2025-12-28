@@ -4316,7 +4316,7 @@ class StockReceivingController(http.Controller):
                     AND (
                         sp.origin IS NULL 
                         OR (
-                            sp.origin NOT ILIKE 'P0%%'
+                            sp.origin NOT ILIKE 'P%%'
                             AND sp.origin NOT ILIKE 'PO%%'
                         )
                     )
@@ -4393,7 +4393,7 @@ class StockReceivingController(http.Controller):
                     AND (
                         sp.origin IS NULL 
                         OR (
-                            sp.origin NOT ILIKE 'P0%%'
+                            sp.origin NOT ILIKE 'P%%'
                             AND sp.origin NOT ILIKE 'PO%%'
                         )
                     )
