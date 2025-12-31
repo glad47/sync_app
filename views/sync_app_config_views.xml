@@ -30,14 +30,21 @@
                             <group>
                                 <group string="User">
                                     <field name="app_user_id" 
-                                           options="{'no_create': True, 'no_open': True}"
-                                           required="1"/>
+                                        options="{'no_create': True, 'no_open': True}"
+                                        required="1"/>
                                 </group>
                                 <group string="POS">
                                     <field name="app_pos_config_id" 
-                                           options="{'no_create': True, 'no_open': True}"
-                                           />
+                                        options="{'no_create': True, 'no_open': True}"/>
                                 </group>
+                            </group>
+                            <group>
+                                <group string="Sales Team">
+                                    <field name="app_sales_team_id" 
+                                        options="{'no_create': True, 'no_open': True}"
+                                        required="1"/>
+                                </group>
+                                <group></group>
                             </group>
                         </page>
                         

@@ -111,6 +111,17 @@ class SyncAppConfig(models.Model):
         string='Warehouse Contact Mappings'
     )
     
+
+    # ============================================
+    # SALES TEAM CONFIGURATION
+    # ============================================
+    app_sales_team_id = fields.Many2one(
+        'crm.team',
+        string='Sales Team',
+        required=True,
+        help='The sales team used for App operations'
+    )
+    
     # ============================================
     # CONSTRAINTS
     # ============================================

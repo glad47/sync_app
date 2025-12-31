@@ -1700,6 +1700,7 @@ class PosSyncController(http.Controller):
                         'partner_id': partner.id,
                         'warehouse_id': warehouse_id,
                         'order_line': order_lines,
+                        'team_id': config.app_sales_team_id.id,  
                         'note': order_data.get('notes', ''),
                         'client_order_ref': order_data.get('name', ''),
                     })
