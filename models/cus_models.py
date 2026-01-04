@@ -1716,31 +1716,33 @@ class PosSyncController(http.Controller):
                     # ============================================================
                     try:
                         pickings = sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel'))
-                        
+
                         if pickings:
                             for picking in pickings:
                                 _logger.info(f"Auto-validating delivery {picking.name}")
-                                
+
+                                # Make sure picking is fully assigned
+                                picking.action_assign()
+
                                 # Set all quantities as done
                                 for move in picking.move_ids:
-                                    move.write({
-                                        'quantity_done': move.product_uom_qty,
-                                        'state': 'assigned'
-                                    })
-                                
-                                # Force immediate validation with context
+                                    move.quantity_done = move.product_uom_qty
+
+                                # Validate without creating backorders or batch transfers
                                 picking.with_context(
                                     skip_backorder=True,
+                                    cancel_backorder=True,
                                     skip_sms=True,
-                                    cancel_backorder=True
+                                    no_batch=True,  # <-- important
                                 ).button_validate()
-                                
+
                                 _logger.info(f"✓ Delivery {picking.name} validated, state: {picking.state}")
                         else:
                             _logger.info(f"No deliveries to validate for {sale_order.name}")
 
                     except Exception as delivery_error:
                         _logger.error(f"Delivery validation error: {str(delivery_error)}")
+
                         # Don't stop the process, continue to invoicing
 
                     # ============================================================
