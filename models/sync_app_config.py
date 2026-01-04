@@ -118,7 +118,7 @@ class SyncAppConfig(models.Model):
     app_sales_team_id = fields.Many2one(
         'crm.team',
         string='Sales Team',
-        required=True,
+        required=False,
         help='The sales team used for App operations'
     )
     

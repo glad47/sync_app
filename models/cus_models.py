@@ -1703,6 +1703,7 @@ class PosSyncController(http.Controller):
                         'team_id': config.app_sales_team_id.id,  
                         'note': order_data.get('notes', ''),
                         'client_order_ref': order_data.get('name', ''),
+                        'user_id': config.app_user_id.id, 
                     })
 
                     _logger.info(f"✓ Created sale order {sale_order.name}")
@@ -1711,90 +1712,36 @@ class PosSyncController(http.Controller):
                     sale_order.action_confirm()
 
                     # ============================================================
-                    # STEP 4.5: FORCE VALIDATE DELIVERY - SIMPLIFIED & AGGRESSIVE
+                    # STEP 4.5: AUTO-VALIDATE DELIVERY - SIMPLIFIED
                     # ============================================================
                     try:
-                        # Get all delivery pickings for this sale order
-                        pickings = sale_order.picking_ids.filtered(
-                            lambda p: p.state not in ('done', 'cancel')
-                        )
+                        pickings = sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel'))
                         
                         if pickings:
                             for picking in pickings:
-                                _logger.info(f"Force validating delivery {picking.name}, state: {picking.state}")
+                                _logger.info(f"Auto-validating delivery {picking.name}")
                                 
-                                # Ensure all moves have quantity_done set
+                                # Set all quantities as done
                                 for move in picking.move_ids:
-                                    if move.quantity_done == 0:
-                                        move.quantity_done = move.product_uom_qty
-                                    
-                                    for move_line in move.move_line_ids:
-                                        if move_line.qty_done == 0:
-                                            move_line.qty_done = move_line.reserved_uom_qty or move_line.product_uom_qty
+                                    move.write({
+                                        'quantity_done': move.product_uom_qty,
+                                        'state': 'assigned'
+                                    })
                                 
-                                validated = False
+                                # Force immediate validation with context
+                                picking.with_context(
+                                    skip_backorder=True,
+                                    skip_sms=True,
+                                    cancel_backorder=True
+                                ).button_validate()
                                 
-                                # Attempt 1: Standard button_validate
-                                if not validated:
-                                    try:
-                                        result = picking.button_validate()
-                                        
-                                        # Handle backorder wizard if it appears
-                                        if isinstance(result, dict) and result.get('res_model') == 'stock.backorder.confirmation':
-                                            backorder_wizard_id = result.get('res_id')
-                                            backorder_wizard = request.env['stock.backorder.confirmation'].browse(backorder_wizard_id)
-                                            backorder_wizard.process_cancel_backorder()
-                                        
-                                        validated = True
-                                        _logger.info(f"✓ Delivery {picking.name} validated successfully")
-                                    except Exception as e1:
-                                        _logger.warning(f"Attempt 1 failed: {str(e1)}")
-                                
-                                # Attempt 2: Force with context
-                                if not validated:
-                                    try:
-                                        picking.with_context(skip_backorder=True, skip_sms=True).button_validate()
-                                        validated = True
-                                        _logger.info(f"✓ Delivery {picking.name} validated with context")
-                                    except Exception as e2:
-                                        _logger.warning(f"Attempt 2 failed: {str(e2)}")
-                                
-                                # Attempt 3: Use _action_done
-                                if not validated:
-                                    try:
-                                        picking._action_done()
-                                        validated = True
-                                        _logger.info(f"✓ Delivery {picking.name} validated via _action_done")
-                                    except Exception as e3:
-                                        _logger.warning(f"Attempt 3 failed: {str(e3)}")
-                                
-                                # Attempt 4: FORCE state change (nuclear)
-                                if not validated:
-                                    try:
-                                        picking.move_ids.write({'state': 'done'})
-                                        picking.write({
-                                            'state': 'done',
-                                            'date_done': fields.Datetime.now()
-                                        })
-                                        request.env.cr.commit()
-                                        validated = True
-                                        _logger.warning(f"⚠️  Delivery {picking.name} FORCED to done")
-                                    except Exception as e4:
-                                        _logger.error(f"Nuclear option failed: {str(e4)}")
-                                
-                                # Verify final state
-                                picking.invalidate_recordset()
-                                picking = request.env['stock.picking'].sudo().browse(picking.id)
-                                _logger.info(f"✓ Final delivery state: {picking.state}")
-                            
-                            _logger.info(f"✓ All deliveries processed for {sale_order.name}")
+                                _logger.info(f"✓ Delivery {picking.name} validated, state: {picking.state}")
                         else:
-                            _logger.info(f"No pending deliveries for {sale_order.name}")
-                    
+                            _logger.info(f"No deliveries to validate for {sale_order.name}")
+
                     except Exception as delivery_error:
                         _logger.error(f"Delivery validation error: {str(delivery_error)}")
-                        import traceback
-                        _logger.error(traceback.format_exc())
+                        # Don't stop the process, continue to invoicing
 
                     # ============================================================
                     # STEP 5: Create invoice directly
