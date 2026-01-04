@@ -1752,6 +1752,13 @@ class PosSyncController(http.Controller):
                     try:
                         # Create invoice from sale order
                         invoice = sale_order._create_invoices()
+
+
+                        # Set invoice as simplified (B2C)
+                        invoice.write({
+                            'move_type': 'out_invoice',
+                            'l10n_sa_invoice_type': 'simplified',  # ZATCA simplified invoice
+                        })
                         
                         if not invoice:
                             errors.append(f"Order {order_id}: Failed to create invoice")
