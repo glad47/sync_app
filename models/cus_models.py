@@ -1630,7 +1630,7 @@ class PosSyncController(http.Controller):
                         partner = request.env['res.partner'].sudo().create({
                             'name': name or phone,
                             'phone': phone,
-                            'vat': vat,
+                            'vat': False,
                             'customer_rank': 1,
                         })
 
