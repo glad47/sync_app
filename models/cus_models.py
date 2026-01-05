@@ -1220,7 +1220,7 @@ class PosSyncController(http.Controller):
                     'customer_rank': 1,
                     'country_id': 192,  # Saudi Arabia
                 })
-
+                partner.sudo().write({'country_id': 192})
             simplified_lines = order_data.get('order_lines', [])
             prepared_lines = []
             coupon_point_changes = {}
