@@ -1213,7 +1213,7 @@ class PosSyncController(http.Controller):
                 if updates:
                     partner.write(updates)
             else:
-                partner = request.env['res.partner'].sudo().create({
+                partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
                     'name': name or phone,
                     'phone': phone,
                     'vat': vat,
