@@ -1222,6 +1222,12 @@ class PosSyncController(http.Controller):
                     'customer_rank': 1,
                     'country_id': sa_country.id,  # Saudi Arabia
                 })
+                # Force it via SQL
+                request.env.cr.execute("""
+                    UPDATE res_partner 
+                    SET country_id = %s 
+                    WHERE id = %s
+                    """, (sa_country.id, partner.id,))
                 # partner.sudo().write({'country_id': 192})
             simplified_lines = order_data.get('order_lines', [])
             prepared_lines = []
