@@ -1632,13 +1632,64 @@ class PosSyncController(http.Controller):
                     if not phone:
                         errors.append(f"Order {order_id}: Customer phone is required")
                         continue
-
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                    print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
                     partner = request.env['res.partner'].sudo().search([
                         ('phone', '=', phone),
                         ('customer_rank', '>', 0)
                     ], limit=1)
 
                     if partner:
+                        print(" &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&")
+                        print("wrong place :)")
+
                         updates = {}
                         if name and partner.name != name:
                             updates['name'] = name
@@ -1647,15 +1698,28 @@ class PosSyncController(http.Controller):
                         if updates:
                             partner.write(updates)
                     else:
+                        print("####################################")
+                        print("i am here")
                         sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
-                        partner = request.env['res.partner'].sudo().create({
+
+                        partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
                             'name': name or phone,
                             'phone': phone,
-                            'vat': vat,
+                            'vat': False,
                             'customer_rank': 1,
-                            'country_id': sa_country.id
-                            
+                            'country_id': sa_country.id,  # Saudi Arabia
                         })
+                        print("******************************")
+                        print(partner.read()[0])
+                        # Force it via SQL
+                        request.env.cr.execute("""
+                            UPDATE res_partner 
+                            SET country_id = %s 
+                            WHERE id = %s
+                            """, (sa_country.id, partner.id,))
+
+
+                        partner.invalidate_recordset()
 
                     # ============================================================
                     # STEP 2: Get App warehouse (HARDCODED)
