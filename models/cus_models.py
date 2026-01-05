@@ -1218,6 +1218,7 @@ class PosSyncController(http.Controller):
                     'phone': phone,
                     'vat': vat,
                     'customer_rank': 1,
+                    'country_id': 192,  # Saudi Arabia
                 })
 
             simplified_lines = order_data.get('order_lines', [])
