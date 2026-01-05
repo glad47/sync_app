@@ -1748,36 +1748,38 @@ class PosSyncController(http.Controller):
                     sale_order.action_confirm()
 
                     # ============================================================
-                    # STEP 4.5: AUTO-VALIDATE DELIVERY - SIMPLIFIED
+                    # STEP 4.5: AUTO-VALIDATE DELIVERY
                     # ============================================================
                     try:
-                        pickings = sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel'))
-
-                        if pickings:
-                            for picking in pickings:
-                                _logger.info(f"Auto-validating delivery {picking.name}")
-
-                                # Make sure picking is fully assigned
+                        for picking in sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel')):
+                            _logger.info(f"Auto-validating delivery {picking.name}")
+                            
+                            # Ensure assigned
+                            if picking.state != 'assigned':
                                 picking.action_assign()
-
-                                # Set all quantities as done
+                            
+                            # Use immediate transfer (NO batch transfer)
+                            try:
+                                immediate_transfer = request.env['stock.immediate.transfer'].sudo().create({
+                                    'pick_ids': [(4, picking.id)]
+                                })
+                                immediate_transfer.process()
+                                _logger.info(f"✓ Delivery {picking.name} completed via immediate transfer")
+                            except:
+                                # Fallback: manual validation
                                 for move in picking.move_ids:
                                     move.quantity_done = move.product_uom_qty
-
-                                # Validate without creating backorders or batch transfers
+                                
                                 picking.with_context(
                                     skip_backorder=True,
                                     cancel_backorder=True,
                                     skip_sms=True,
-                                    no_batch=True,  # <-- important
                                 ).button_validate()
-
-                                _logger.info(f"✓ Delivery {picking.name} validated, state: {picking.state}")
-                        else:
-                            _logger.info(f"No deliveries to validate for {sale_order.name}")
+                                _logger.info(f"✓ Delivery {picking.name} validated manually")
 
                     except Exception as delivery_error:
                         _logger.error(f"Delivery validation error: {str(delivery_error)}")
+
 
                         # Don't stop the process, continue to invoicing
 
