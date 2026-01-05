@@ -1205,6 +1205,8 @@ class PosSyncController(http.Controller):
             ], limit=1)
 
             if partner:
+                print("####################################")
+                print("i am here not")
                 updates = {}
                 if name and partner.name != name:
                     updates['name'] = name
@@ -1213,6 +1215,8 @@ class PosSyncController(http.Controller):
                 if updates:
                     partner.write(updates)
             else:
+                print("####################################")
+                print("i am here")
                 sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
 
                 partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
@@ -1643,11 +1647,14 @@ class PosSyncController(http.Controller):
                         if updates:
                             partner.write(updates)
                     else:
+                        sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
                         partner = request.env['res.partner'].sudo().create({
                             'name': name or phone,
                             'phone': phone,
                             'vat': vat,
                             'customer_rank': 1,
+                            'country_id': sa_country.id
+                            
                         })
 
                     # ============================================================
