@@ -1213,14 +1213,16 @@ class PosSyncController(http.Controller):
                 if updates:
                     partner.write(updates)
             else:
+                sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
+
                 partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
                     'name': name or phone,
                     'phone': phone,
-                    'vat': vat,
+                    'vat': False,
                     'customer_rank': 1,
-                    'country_id': 192,  # Saudi Arabia
+                    'country_id': sa_country.id,  # Saudi Arabia
                 })
-                partner.sudo().write({'country_id': 192})
+                # partner.sudo().write({'country_id': 192})
             simplified_lines = order_data.get('order_lines', [])
             prepared_lines = []
             coupon_point_changes = {}
