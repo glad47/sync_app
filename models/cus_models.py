@@ -2486,6 +2486,10 @@ class PosSyncController(http.Controller):
                 query = """
                     SELECT
                         lp.id AS program_id,
+                        lp.total_price AS loyalty_program_total_price,
+                        lp.after_dis AS loyalty_program_after_discount,
+                        lp.discount AS loyalty_program_discount,
+                        lp.minimum_qty AS loyalty_program_minimum_qty,
                         COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
                         lp.create_date AS program_create_date,
                         lp.write_date AS program_write_date,
@@ -2587,6 +2591,10 @@ class PosSyncController(http.Controller):
                 query = """
                     SELECT
                         lp.id AS program_id,
+                        lp.total_price AS loyalty_program_total_price,
+                        lp.after_dis AS loyalty_program_after_discount,
+                        lp.discount AS loyalty_program_discount,
+                        lp.minimum_qty AS loyalty_program_minimum_qty,
                         COALESCE(lp.name->>'ar_001', lp.name->>'en_US', '') AS program_name,
                         lp.create_date AS program_create_date,
                         lp.write_date AS program_write_date,
