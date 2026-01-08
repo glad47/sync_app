@@ -2434,6 +2434,152 @@ class PosSyncController(http.Controller):
             headers=[('Content-Type', 'application/json')],
             status=200
         )        
+    
+
+    @http.route('/api/sync/product/by-date', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_product_sync_by_date(self, **kwargs):
+        """
+        Get all products changed since a specific date.
+        Query parameter: sync_date (format: YYYY-MM-DD HH:MM:SS or YYYY-MM-DD)
+        """
+        # Check token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+        
+        # Get and validate sync_date parameter
+        sync_date_str = kwargs.get('sync_date')
+        
+        if not sync_date_str:
+            return request.make_response(
+                json.dumps({'error': 'sync_date parameter is required (format: YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)', 'status': 400}),
+                headers=[('Content-Type', 'application/json')],
+                status=400
+            )
+        
+        # Parse the date
+        try:
+            # Try parsing with time first
+            try:
+                sync_date = datetime.strptime(sync_date_str, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                # If that fails, try date only
+                sync_date = datetime.strptime(sync_date_str, '%Y-%m-%d')
+        except ValueError:
+            return request.make_response(
+                json.dumps({'error': 'Invalid date format. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS', 'status': 400}),
+                headers=[('Content-Type', 'application/json')],
+                status=400
+            )
+        
+        current_time = datetime.utcnow()
+        
+        # Build the query using product_product as base
+        query = """
+            SELECT 
+                pp.id AS product_id,
+                pp.barcode,
+                pt.id,
+                pt.name,
+                pt.list_price,
+                pt.volume,
+                pt.weight,
+                pt.active,
+                uom.id AS uom_id,
+                uom.name AS uom_name,
+                uom.uom_type,
+                uom.rounding AS uom_rounding,
+                uom.factor AS uom_factor,
+                CASE 
+                    WHEN pp.create_date > %s THEN 'created'
+                    WHEN pp.write_date > %s AND pp.create_date <= %s THEN 'updated'
+                END AS change_type
+            FROM product_product pp
+            LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+            LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
+            WHERE pt.available_in_pos = TRUE 
+            AND pp.barcode IS NOT NULL
+            AND pp.barcode != ''
+            AND (pp.create_date > %s OR pp.write_date > %s)
+            ORDER BY pp.id, pt.id
+        """
+        
+        request.env.cr.execute(query, (sync_date, sync_date, sync_date, sync_date, sync_date))
+        raw_results = request.env.cr.dictfetchall()
+        
+        # Format results
+        created = []
+        updated = []
+        
+        for row in raw_results:
+            # Build uom_id data
+            uom_data = None
+            if row.get('uom_id'):
+                uom_data = {
+                    'id': row['uom_id'],
+                    'name': row['uom_name'],
+                    'uom_type': row['uom_type'],
+                    'rounding': float(row['uom_rounding']) if row['uom_rounding'] else None,
+                    'factor': float(row['uom_factor']) if row['uom_factor'] else None,
+                }
+            
+            # Build product data
+            data = {
+                'id': row['id'],
+                'name': row['name'],
+                'uom_id': uom_data,
+                'barcode': row['barcode'],
+                'list_price': float(row['list_price']) if row['list_price'] else 0.0,
+                'display_name': row['name'],
+                'volume': float(row['volume']) if row['volume'] else 0.0,
+                'weight': float(row['weight']) if row['weight'] else 0.0,
+                'active': row['active'],
+                'product_id': row['product_id'],
+            }
+            
+            payload = {
+                'operation': 0 if row['change_type'] == 'created' else 1,
+                'type': 0,
+                'model': 'product.template',
+                'ids': [row['id']],
+                'data': data
+            }
+            
+            if row['change_type'] == 'created':
+                created.append(payload)
+            else:
+                updated.append(payload)
+        
+        # Build response
+        response = {
+            'success': True,
+            'sync_date': sync_date.isoformat(),
+            'current_time': current_time.isoformat(),
+            'changes': {
+                'created': created,
+                'updated': updated,
+                'deleted': []
+            },
+            'summary': {
+                'total_changes': len(created) + len(updated),
+                'created_count': len(created),
+                'updated_count': len(updated),
+                'deleted_count': 0
+            }
+        }
+        
+        return request.make_response(
+            json.dumps(response, default=str, ensure_ascii=False),
+            headers=[('Content-Type', 'application/json')],
+            status=200
+        )
+
 
     @http.route('/api/sync/loyalty', type='http', auth='none', methods=['GET'], csrf=False)
     def get_loyalty_sync(self, **kwargs):
