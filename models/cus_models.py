@@ -4266,6 +4266,84 @@ class PurchaseOrderReceivingController(http.Controller):
                 'status': 'error',
                 'message': str(e)
             }
+        
+    @http.route('/api/sync/transfer/<string:transfer_name>', type='json', auth='public', methods=['GET'])
+    def get_transfer_details(self, transfer_name):
+        """Get stock transfer/picking details by name"""
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            # Search for transfer by name
+            transfer = request.env['stock.picking'].sudo().search([
+                ('name', '=', transfer_name)
+            ], limit=1)
+
+            if not transfer:
+                return {
+                    'status': 'error',
+                    'message': f'Transfer {transfer_name} not found'
+                }
+
+            # Build partner data
+            partner_data = None
+            if transfer.partner_id:
+                partner_data = {
+                    'id': transfer.partner_id.id,
+                    'name': transfer.partner_id.name,
+                    'phone': transfer.partner_id.phone,
+                    'email': transfer.partner_id.email,
+                }
+
+            # Build move lines data
+            move_lines = []
+            for move in transfer.move_ids:
+                quantity_ordered = float(move.product_uom_qty) if move.product_uom_qty else 0.0
+                quantity_done = float(move.quantity_done) if move.quantity_done else 0.0
+                
+                move_lines.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'product_code': move.product_id.default_code,
+                    'quantity_ordered': quantity_ordered,
+                    'quantity_done': quantity_done,
+                    'quantity_remaining': quantity_ordered - quantity_done,
+                    'uom_id': move.product_uom.id,
+                    'uom_name': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            return {
+                'status': 'success',
+                'transfer': {
+                    'id': transfer.id,
+                    'name': transfer.name,
+                    'state': transfer.state,
+                    'origin': transfer.origin,
+                    'picking_type': transfer.picking_type_id.name,
+                    'picking_type_code': transfer.picking_type_id.code,
+                    'warehouse_id': transfer.picking_type_id.warehouse_id.id,
+                    'warehouse_name': transfer.picking_type_id.warehouse_id.name,
+                    'scheduled_date': transfer.scheduled_date.isoformat() if transfer.scheduled_date else None,
+                    'date_done': transfer.date_done.isoformat() if transfer.date_done else None,
+                    'create_date': transfer.create_date.isoformat() if transfer.create_date else None,
+                    'partner': partner_data,
+                    'move_lines': move_lines
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get transfer details")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }    
 
 
 
@@ -4367,85 +4445,9 @@ class PurchaseOrderReceivingController(http.Controller):
 
 
 
-class StockReceivingController(http.Controller):
+# class StockReceivingController(http.Controller):
 
-    @http.route('/api/transfer/<string:transfer_name>', type='json', auth='public', methods=['GET'])
-    def get_transfer_details(self, transfer_name):
-        """Get stock transfer/picking details by name"""
-        # Verify token
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
-
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
-
-        try:
-            # Search for transfer by name
-            transfer = request.env['stock.picking'].sudo().search([
-                ('name', '=', transfer_name)
-            ], limit=1)
-
-            if not transfer:
-                return {
-                    'status': 'error',
-                    'message': f'Transfer {transfer_name} not found'
-                }
-
-            # Build partner data
-            partner_data = None
-            if transfer.partner_id:
-                partner_data = {
-                    'id': transfer.partner_id.id,
-                    'name': transfer.partner_id.name,
-                    'phone': transfer.partner_id.phone,
-                    'email': transfer.partner_id.email,
-                }
-
-            # Build move lines data
-            move_lines = []
-            for move in transfer.move_ids:
-                quantity_ordered = float(move.product_uom_qty) if move.product_uom_qty else 0.0
-                quantity_done = float(move.quantity_done) if move.quantity_done else 0.0
-                
-                move_lines.append({
-                    'move_id': move.id,
-                    'product_id': move.product_id.id,
-                    'product_name': move.product_id.name,
-                    'product_barcode': move.product_id.barcode,
-                    'product_code': move.product_id.default_code,
-                    'quantity_ordered': quantity_ordered,
-                    'quantity_done': quantity_done,
-                    'quantity_remaining': quantity_ordered - quantity_done,
-                    'uom_id': move.product_uom.id,
-                    'uom_name': move.product_uom.name,
-                    'state': move.state,
-                })
-
-            return {
-                'status': 'success',
-                'transfer': {
-                    'id': transfer.id,
-                    'name': transfer.name,
-                    'state': transfer.state,
-                    'origin': transfer.origin,
-                    'picking_type': transfer.picking_type_id.name,
-                    'picking_type_code': transfer.picking_type_id.code,
-                    'warehouse_id': transfer.picking_type_id.warehouse_id.id,
-                    'warehouse_name': transfer.picking_type_id.warehouse_id.name,
-                    'scheduled_date': transfer.scheduled_date.isoformat() if transfer.scheduled_date else None,
-                    'date_done': transfer.date_done.isoformat() if transfer.date_done else None,
-                    'create_date': transfer.create_date.isoformat() if transfer.create_date else None,
-                    'partner': partner_data,
-                    'move_lines': move_lines
-                }
-            }
-
-        except Exception as e:
-            _logger.exception("Failed to get transfer details")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+    
 
     # @http.route('/api/sync/receipt', type='http', auth='none', methods=['GET'], csrf=False)
     # def get_receipt_sync(self, **kwargs):
