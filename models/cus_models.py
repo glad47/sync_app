@@ -4267,15 +4267,32 @@ class PurchaseOrderReceivingController(http.Controller):
                 'message': str(e)
             }
         
-    @http.route('/api/sync/transfer/<string:transfer_name>', type='json', auth='public', methods=['GET'])
-    def get_transfer_details(self, transfer_name):
-        """Get stock transfer/picking details by name"""
-        # Verify token
+    @http.route('/api/sync/transfer', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_transfer_details(self, **kwargs):
+        """
+        Get stock transfer/picking details by name.
+        Query parameter: name (the transfer reference, e.g., WH/IN/00001)
+        """
+        # Check token
         token = request.httprequest.headers.get('Authorization')
         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+                headers=[('Content-Type', 'application/json')],
+                status=401
+            )
+
+        # Get and validate name parameter
+        transfer_name = kwargs.get('name')
+        
+        if not transfer_name:
+            return request.make_response(
+                json.dumps({'error': 'name parameter is required', 'status': 400}),
+                headers=[('Content-Type', 'application/json')],
+                status=400
+            )
 
         try:
             # Search for transfer by name
@@ -4284,10 +4301,14 @@ class PurchaseOrderReceivingController(http.Controller):
             ], limit=1)
 
             if not transfer:
-                return {
-                    'status': 'error',
-                    'message': f'Transfer {transfer_name} not found'
-                }
+                return request.make_response(
+                    json.dumps({
+                        'status': 'error',
+                        'message': f'Transfer {transfer_name} not found'
+                    }),
+                    headers=[('Content-Type', 'application/json')],
+                    status=404
+                )
 
             # Build partner data
             partner_data = None
@@ -4319,7 +4340,7 @@ class PurchaseOrderReceivingController(http.Controller):
                     'state': move.state,
                 })
 
-            return {
+            response = {
                 'status': 'success',
                 'transfer': {
                     'id': transfer.id,
@@ -4338,12 +4359,22 @@ class PurchaseOrderReceivingController(http.Controller):
                 }
             }
 
+            return request.make_response(
+                json.dumps(response, default=str, ensure_ascii=False),
+                headers=[('Content-Type', 'application/json')],
+                status=200
+            )
+
         except Exception as e:
             _logger.exception("Failed to get transfer details")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }    
+            return request.make_response(
+                json.dumps({
+                    'status': 'error',
+                    'message': str(e)
+                }),
+                headers=[('Content-Type', 'application/json')],
+                status=500
+            )
 
 
 
