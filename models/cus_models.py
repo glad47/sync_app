@@ -4367,309 +4367,387 @@ class PurchaseOrderReceivingController(http.Controller):
 
 
 
-# class StockReceivingController(http.Controller):
+class StockReceivingController(http.Controller):
 
-#     @http.route('/api/sync/receipt', type='http', auth='none', methods=['GET'], csrf=False)
-#     def get_receipt_sync(self, **kwargs):
-#         """
-#         Get all incoming stock receipts to App warehouse changed since last sync.
-#         Returns created, updated, and validated receipts (including purchase order receipts).
+    @http.route('/api/transfer/<string:transfer_name>', type='json', auth='public', methods=['GET'])
+    def get_transfer_details(self, transfer_name):
+        """Get stock transfer/picking details by name"""
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
+
+        try:
+            # Search for transfer by name
+            transfer = request.env['stock.picking'].sudo().search([
+                ('name', '=', transfer_name)
+            ], limit=1)
+
+            if not transfer:
+                return {
+                    'status': 'error',
+                    'message': f'Transfer {transfer_name} not found'
+                }
+
+            # Build partner data
+            partner_data = None
+            if transfer.partner_id:
+                partner_data = {
+                    'id': transfer.partner_id.id,
+                    'name': transfer.partner_id.name,
+                    'phone': transfer.partner_id.phone,
+                    'email': transfer.partner_id.email,
+                }
+
+            # Build move lines data
+            move_lines = []
+            for move in transfer.move_ids:
+                quantity_ordered = float(move.product_uom_qty) if move.product_uom_qty else 0.0
+                quantity_done = float(move.quantity_done) if move.quantity_done else 0.0
+                
+                move_lines.append({
+                    'move_id': move.id,
+                    'product_id': move.product_id.id,
+                    'product_name': move.product_id.name,
+                    'product_barcode': move.product_id.barcode,
+                    'product_code': move.product_id.default_code,
+                    'quantity_ordered': quantity_ordered,
+                    'quantity_done': quantity_done,
+                    'quantity_remaining': quantity_ordered - quantity_done,
+                    'uom_id': move.product_uom.id,
+                    'uom_name': move.product_uom.name,
+                    'state': move.state,
+                })
+
+            return {
+                'status': 'success',
+                'transfer': {
+                    'id': transfer.id,
+                    'name': transfer.name,
+                    'state': transfer.state,
+                    'origin': transfer.origin,
+                    'picking_type': transfer.picking_type_id.name,
+                    'picking_type_code': transfer.picking_type_id.code,
+                    'warehouse_id': transfer.picking_type_id.warehouse_id.id,
+                    'warehouse_name': transfer.picking_type_id.warehouse_id.name,
+                    'scheduled_date': transfer.scheduled_date.isoformat() if transfer.scheduled_date else None,
+                    'date_done': transfer.date_done.isoformat() if transfer.date_done else None,
+                    'create_date': transfer.create_date.isoformat() if transfer.create_date else None,
+                    'partner': partner_data,
+                    'move_lines': move_lines
+                }
+            }
+
+        except Exception as e:
+            _logger.exception("Failed to get transfer details")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+    # @http.route('/api/sync/receipt', type='http', auth='none', methods=['GET'], csrf=False)
+    # def get_receipt_sync(self, **kwargs):
+    #     """
+    #     Get all incoming stock receipts to App warehouse changed since last sync.
+    #     Returns created, updated, and validated receipts (including purchase order receipts).
         
-#         Request:
-#         GET /api/sync/receipt
-#         Headers: Authorization: your-token
-#         """
-#         # Check token
-#         token = request.httprequest.headers.get('Authorization')
-#         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    #     Request:
+    #     GET /api/sync/receipt
+    #     Headers: Authorization: your-token
+    #     """
+    #     # Check token
+    #     token = request.httprequest.headers.get('Authorization')
+    #     user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-#         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-#             return request.make_response(
-#                 json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
-#                 headers=[('Content-Type', 'application/json')],
-#                 status=401
-#             )
+    #     if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+    #         return request.make_response(
+    #             json.dumps({'error': 'Unauthorized or token expired', 'status': 401}),
+    #             headers=[('Content-Type', 'application/json')],
+    #             status=401
+    #         )
 
-#         try:
-#             # Get sync config for warehouse filter
-#             config = request.env['sync.app.config'].sudo().search([], limit=1)
-#             if not config:
-#                 return request.make_response(
-#                     json.dumps({'error': 'Sync App not configured', 'success': False}),
-#                     headers=[('Content-Type', 'application/json')],
-#                     status=400
-#                 )
+    #     try:
+    #         # Get sync config for warehouse filter
+    #         config = request.env['sync.app.config'].sudo().search([], limit=1)
+    #         if not config:
+    #             return request.make_response(
+    #                 json.dumps({'error': 'Sync App not configured', 'success': False}),
+    #                 headers=[('Content-Type', 'application/json')],
+    #                 status=400
+    #             )
 
-#             app_warehouse = config.app_warehouse_id
-#             if not app_warehouse:
-#                 return request.make_response(
-#                     json.dumps({'error': 'App warehouse not configured', 'success': False}),
-#                     headers=[('Content-Type', 'application/json')],
-#                     status=400
-#                 )
+    #         app_warehouse = config.app_warehouse_id
+    #         if not app_warehouse:
+    #             return request.make_response(
+    #                 json.dumps({'error': 'App warehouse not configured', 'success': False}),
+    #                 headers=[('Content-Type', 'application/json')],
+    #                 status=400
+    #             )
 
-#             warehouse_id = app_warehouse.id
+    #         warehouse_id = app_warehouse.id
 
-#             # Get sync tracker
-#             sync_record = request.env['sync.update'].sudo().get_sync_record()
-#             last_sync = sync_record.last_transfer_sync
-#             current_time = datetime.utcnow()
+    #         # Get sync tracker
+    #         sync_record = request.env['sync.update'].sudo().get_sync_record()
+    #         last_sync = sync_record.last_transfer_sync
+    #         current_time = datetime.utcnow()
 
-#             # Build the query
-#             if last_sync:
-#                 query = """
-#                     SELECT
-#                         sp.id AS picking_id,
-#                         sp.name AS picking_name,
-#                         sp.state AS picking_state,
-#                         sp.origin,
-#                         sp.scheduled_date,
-#                         sp.date_done,
-#                         sp.create_date AS picking_create_date,
-#                         sp.write_date AS picking_write_date,
+    #         # Build the query
+    #         if last_sync:
+    #             query = """
+    #                 SELECT
+    #                     sp.id AS picking_id,
+    #                     sp.name AS picking_name,
+    #                     sp.state AS picking_state,
+    #                     sp.origin,
+    #                     sp.scheduled_date,
+    #                     sp.date_done,
+    #                     sp.create_date AS picking_create_date,
+    #                     sp.write_date AS picking_write_date,
                         
-#                         -- Picking Type & Warehouse
-#                         spt.id AS picking_type_id,
-#                         spt.name AS picking_type_name,
-#                         sw.id AS warehouse_id,
-#                         sw.name AS warehouse_name,
+    #                     -- Picking Type & Warehouse
+    #                     spt.id AS picking_type_id,
+    #                     spt.name AS picking_type_name,
+    #                     sw.id AS warehouse_id,
+    #                     sw.name AS warehouse_name,
                         
-#                         -- Partner
-#                         rp.id AS partner_id,
-#                         rp.name AS partner_name,
-#                         rp.phone AS partner_phone,
-#                         rp.email AS partner_email,
+    #                     -- Partner
+    #                     rp.id AS partner_id,
+    #                     rp.name AS partner_name,
+    #                     rp.phone AS partner_phone,
+    #                     rp.email AS partner_email,
                         
-#                         -- Stock Move
-#                         sm.id AS move_id,
-#                         sm.product_uom_qty AS quantity_ordered,
-#                         sm.quantity_done,
-#                         sm.state AS move_state,
+    #                     -- Stock Move
+    #                     sm.id AS move_id,
+    #                     sm.product_uom_qty AS quantity_ordered,
+    #                     sm.quantity_done,
+    #                     sm.state AS move_state,
                         
-#                         -- Product
-#                         pp.id AS product_id,
-#                         COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
-#                         pp.barcode AS product_barcode,
-#                         pp.default_code AS product_code,
+    #                     -- Product
+    #                     pp.id AS product_id,
+    #                     COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+    #                     pp.barcode AS product_barcode,
+    #                     pp.default_code AS product_code,
                         
-#                         -- UOM
-#                         uom.id AS uom_id,
-#                         COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+    #                     -- UOM
+    #                     uom.id AS uom_id,
+    #                     COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
                         
-#                         -- Change type
-#                         CASE 
-#                             WHEN sp.create_date > %s THEN 'created'
-#                             WHEN sp.state = 'cancel' AND sp.write_date > %s THEN 'cancelled'
-#                             WHEN sp.state = 'done' AND sp.date_done > %s THEN 'validated'
-#                             WHEN sp.write_date > %s AND sp.create_date <= %s THEN 'updated'
-#                         END AS change_type
+    #                     -- Change type
+    #                     CASE 
+    #                         WHEN sp.create_date > %s THEN 'created'
+    #                         WHEN sp.state = 'cancel' AND sp.write_date > %s THEN 'cancelled'
+    #                         WHEN sp.state = 'done' AND sp.date_done > %s THEN 'validated'
+    #                         WHEN sp.write_date > %s AND sp.create_date <= %s THEN 'updated'
+    #                     END AS change_type
 
-#                     FROM stock_picking sp
-#                     LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
-#                     LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
-#                     LEFT JOIN res_partner rp ON rp.id = sp.partner_id
-#                     LEFT JOIN stock_move sm ON sm.picking_id = sp.id
-#                     LEFT JOIN product_product pp ON pp.id = sm.product_id
-#                     LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
-#                     LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+    #                 FROM stock_picking sp
+    #                 LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+    #                 LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+    #                 LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+    #                 LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+    #                 LEFT JOIN product_product pp ON pp.id = sm.product_id
+    #                 LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+    #                 LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
 
-#                     WHERE sw.id = %s
-#                     AND spt.code = 'incoming'
-#                     AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
-#                     ORDER BY sp.id, sm.id;
-#                 """
-#                 request.env.cr.execute(query, (
-#                     last_sync,  # created check
-#                     last_sync,  # cancelled check
-#                     last_sync,  # validated check
-#                     last_sync, last_sync,  # updated check
-#                     warehouse_id,  # warehouse filter
-#                     last_sync, last_sync, last_sync  # date filters
-#                 ))
-#             else:
-#                 # First sync - get all incoming receipts (including PO receipts)
-#                 query = """
-#                     SELECT
-#                         sp.id AS picking_id,
-#                         sp.name AS picking_name,
-#                         sp.state AS picking_state,
-#                         sp.origin,
-#                         sp.scheduled_date,
-#                         sp.date_done,
-#                         sp.create_date AS picking_create_date,
-#                         sp.write_date AS picking_write_date,
+    #                 WHERE sw.id = %s
+    #                 AND spt.code = 'incoming'
+    #                 AND (sp.create_date > %s OR sp.write_date > %s OR sp.date_done > %s)
+    #                 ORDER BY sp.id, sm.id;
+    #             """
+    #             request.env.cr.execute(query, (
+    #                 last_sync,  # created check
+    #                 last_sync,  # cancelled check
+    #                 last_sync,  # validated check
+    #                 last_sync, last_sync,  # updated check
+    #                 warehouse_id,  # warehouse filter
+    #                 last_sync, last_sync, last_sync  # date filters
+    #             ))
+    #         else:
+    #             # First sync - get all incoming receipts (including PO receipts)
+    #             query = """
+    #                 SELECT
+    #                     sp.id AS picking_id,
+    #                     sp.name AS picking_name,
+    #                     sp.state AS picking_state,
+    #                     sp.origin,
+    #                     sp.scheduled_date,
+    #                     sp.date_done,
+    #                     sp.create_date AS picking_create_date,
+    #                     sp.write_date AS picking_write_date,
                         
-#                         -- Picking Type & Warehouse
-#                         spt.id AS picking_type_id,
-#                         spt.name AS picking_type_name,
-#                         sw.id AS warehouse_id,
-#                         sw.name AS warehouse_name,
+    #                     -- Picking Type & Warehouse
+    #                     spt.id AS picking_type_id,
+    #                     spt.name AS picking_type_name,
+    #                     sw.id AS warehouse_id,
+    #                     sw.name AS warehouse_name,
                         
-#                         -- Partner
-#                         rp.id AS partner_id,
-#                         rp.name AS partner_name,
-#                         rp.phone AS partner_phone,
-#                         rp.email AS partner_email,
+    #                     -- Partner
+    #                     rp.id AS partner_id,
+    #                     rp.name AS partner_name,
+    #                     rp.phone AS partner_phone,
+    #                     rp.email AS partner_email,
                         
-#                         -- Stock Move
-#                         sm.id AS move_id,
-#                         sm.product_uom_qty AS quantity_ordered,
-#                         sm.quantity_done,
-#                         sm.state AS move_state,
+    #                     -- Stock Move
+    #                     sm.id AS move_id,
+    #                     sm.product_uom_qty AS quantity_ordered,
+    #                     sm.quantity_done,
+    #                     sm.state AS move_state,
                         
-#                         -- Product
-#                         pp.id AS product_id,
-#                         COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
-#                         pp.barcode AS product_barcode,
-#                         pp.default_code AS product_code,
+    #                     -- Product
+    #                     pp.id AS product_id,
+    #                     COALESCE(pt.name->>'ar_001', pt.name->>'en_US', '') AS product_name,
+    #                     pp.barcode AS product_barcode,
+    #                     pp.default_code AS product_code,
                         
-#                         -- UOM
-#                         uom.id AS uom_id,
-#                         COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
+    #                     -- UOM
+    #                     uom.id AS uom_id,
+    #                     COALESCE(uom.name->>'ar_001', uom.name->>'en_US', '') AS uom_name,
                         
-#                         'created' AS change_type
+    #                     'created' AS change_type
 
-#                     FROM stock_picking sp
-#                     LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
-#                     LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
-#                     LEFT JOIN res_partner rp ON rp.id = sp.partner_id
-#                     LEFT JOIN stock_move sm ON sm.picking_id = sp.id
-#                     LEFT JOIN product_product pp ON pp.id = sm.product_id
-#                     LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
-#                     LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
+    #                 FROM stock_picking sp
+    #                 LEFT JOIN stock_picking_type spt ON spt.id = sp.picking_type_id
+    #                 LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+    #                 LEFT JOIN res_partner rp ON rp.id = sp.partner_id
+    #                 LEFT JOIN stock_move sm ON sm.picking_id = sp.id
+    #                 LEFT JOIN product_product pp ON pp.id = sm.product_id
+    #                 LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+    #                 LEFT JOIN uom_uom uom ON uom.id = sm.product_uom
 
-#                     WHERE sw.id = %s
-#                     AND spt.code = 'incoming'
-#                     ORDER BY sp.id, sm.id;
-#                 """
-#                 request.env.cr.execute(query, (warehouse_id,))
+    #                 WHERE sw.id = %s
+    #                 AND spt.code = 'incoming'
+    #                 ORDER BY sp.id, sm.id;
+    #             """
+    #             request.env.cr.execute(query, (warehouse_id,))
 
-#             raw_results = request.env.cr.dictfetchall()
+    #         raw_results = request.env.cr.dictfetchall()
 
-#             # Group results by picking_id
-#             pickings_dict = {}
-#             for row in raw_results:
-#                 picking_id = row['picking_id']
+    #         # Group results by picking_id
+    #         pickings_dict = {}
+    #         for row in raw_results:
+    #             picking_id = row['picking_id']
                 
-#                 if picking_id not in pickings_dict:
-#                     # Partner data
-#                     partner_data = None
-#                     if row.get('partner_id'):
-#                         partner_data = {
-#                             'id': row['partner_id'],
-#                             'name': row['partner_name'],
-#                             'phone': row['partner_phone'],
-#                             'email': row['partner_email'],
-#                         }
+    #             if picking_id not in pickings_dict:
+    #                 # Partner data
+    #                 partner_data = None
+    #                 if row.get('partner_id'):
+    #                     partner_data = {
+    #                         'id': row['partner_id'],
+    #                         'name': row['partner_name'],
+    #                         'phone': row['partner_phone'],
+    #                         'email': row['partner_email'],
+    #                     }
                     
-#                     # Initialize picking data
-#                     pickings_dict[picking_id] = {
-#                         'id': picking_id,
-#                         'name': row['picking_name'],
-#                         'state': row['picking_state'],
-#                         'origin': row['origin'],
-#                         'scheduled_date': row['scheduled_date'].isoformat() if row['scheduled_date'] else None,
-#                         'date_done': row['date_done'].isoformat() if row['date_done'] else None,
-#                         'create_date': row['picking_create_date'].isoformat() if row['picking_create_date'] else None,
-#                         'partner': partner_data,
-#                         'warehouse_id': row['warehouse_id'],
-#                         'warehouse_name': row['warehouse_name'],
-#                         'picking_type_name': row['picking_type_name'],
-#                         'move_lines': [],
-#                         'change_type': row['change_type'],
-#                     }
+    #                 # Initialize picking data
+    #                 pickings_dict[picking_id] = {
+    #                     'id': picking_id,
+    #                     'name': row['picking_name'],
+    #                     'state': row['picking_state'],
+    #                     'origin': row['origin'],
+    #                     'scheduled_date': row['scheduled_date'].isoformat() if row['scheduled_date'] else None,
+    #                     'date_done': row['date_done'].isoformat() if row['date_done'] else None,
+    #                     'create_date': row['picking_create_date'].isoformat() if row['picking_create_date'] else None,
+    #                     'partner': partner_data,
+    #                     'warehouse_id': row['warehouse_id'],
+    #                     'warehouse_name': row['warehouse_name'],
+    #                     'picking_type_name': row['picking_type_name'],
+    #                     'move_lines': [],
+    #                     'change_type': row['change_type'],
+    #                 }
                 
-#                 # Add move line
-#                 if row.get('move_id'):
-#                     quantity_ordered = float(row['quantity_ordered']) if row['quantity_ordered'] else 0.0
-#                     quantity_done = float(row['quantity_done']) if row['quantity_done'] else 0.0
+    #             # Add move line
+    #             if row.get('move_id'):
+    #                 quantity_ordered = float(row['quantity_ordered']) if row['quantity_ordered'] else 0.0
+    #                 quantity_done = float(row['quantity_done']) if row['quantity_done'] else 0.0
                     
-#                     move_data = {
-#                         'id': row['move_id'],
-#                         'product_id': row['product_id'],
-#                         'product_name': row['product_name'],
-#                         'product_barcode': row['product_barcode'],
-#                         'product_code': row['product_code'],
-#                         'quantity_ordered': quantity_ordered,
-#                         'quantity_done': quantity_done,
-#                         'quantity_remaining': quantity_ordered - quantity_done,
-#                         'uom_id': row['uom_id'],
-#                         'uom_name': row['uom_name'],
-#                         'state': row['move_state'],
-#                     }
-#                     pickings_dict[picking_id]['move_lines'].append(move_data)
+    #                 move_data = {
+    #                     'id': row['move_id'],
+    #                     'product_id': row['product_id'],
+    #                     'product_name': row['product_name'],
+    #                     'product_barcode': row['product_barcode'],
+    #                     'product_code': row['product_code'],
+    #                     'quantity_ordered': quantity_ordered,
+    #                     'quantity_done': quantity_done,
+    #                     'quantity_remaining': quantity_ordered - quantity_done,
+    #                     'uom_id': row['uom_id'],
+    #                     'uom_name': row['uom_name'],
+    #                     'state': row['move_state'],
+    #                 }
+    #                 pickings_dict[picking_id]['move_lines'].append(move_data)
 
-#             # Format results
-#             created = []
-#             updated = []
-#             validated = []
+    #         # Format results
+    #         created = []
+    #         updated = []
+    #         validated = []
 
-#             for picking_id, picking_data in pickings_dict.items():
-#                 change_type = picking_data.pop('change_type')
+    #         for picking_id, picking_data in pickings_dict.items():
+    #             change_type = picking_data.pop('change_type')
                 
-#                 # Operation codes
-#                 if change_type == 'created':
-#                     operation = 0
-#                 elif change_type == 'validated':
-#                     operation = 3
-#                 else:
-#                     operation = 1
+    #             # Operation codes
+    #             if change_type == 'created':
+    #                 operation = 0
+    #             elif change_type == 'validated':
+    #                 operation = 3
+    #             else:
+    #                 operation = 1
                 
-#                 payload = {
-#                     'operation': operation,
-#                     'type': 7,
-#                     'model': 'stock.picking',
-#                     'ids': [picking_id],
-#                     'data': picking_data
-#                 }
+    #             payload = {
+    #                 'operation': operation,
+    #                 'type': 7,
+    #                 'model': 'stock.picking',
+    #                 'ids': [picking_id],
+    #                 'data': picking_data
+    #             }
 
-#                 if change_type == 'created':
-#                     created.append(payload)
-#                 elif change_type == 'validated':
-#                     validated.append(payload)
-#                 else:
-#                     updated.append(payload)
+    #             if change_type == 'created':
+    #                 created.append(payload)
+    #             elif change_type == 'validated':
+    #                 validated.append(payload)
+    #             else:
+    #                 updated.append(payload)
 
-#             # Update last sync time
-#             sync_record.sudo().write({'last_transfer_sync': current_time})
+    #         # Update last sync time
+    #         sync_record.sudo().write({'last_transfer_sync': current_time})
 
-#             # Build response
-#             response = {
-#                 'success': True,
-#                 'warehouse': {
-#                     'id': warehouse_id,
-#                     'name': app_warehouse.name,
-#                 },
-#                 'last_sync_time': last_sync.isoformat() if last_sync else None,
-#                 'current_sync_time': current_time.isoformat(),
-#                 'changes': {
-#                     'created': created,
-#                     'updated': updated,
-#                     'validated': validated,
-#                     'deleted': []
-#                 },
-#                 'summary': {
-#                     'total_changes': len(created) + len(updated) + len(validated),
-#                     'created_count': len(created),
-#                     'updated_count': len(updated),
-#                     'validated_count': len(validated),
-#                     'deleted_count': 0
-#                 }
-#             }
+    #         # Build response
+    #         response = {
+    #             'success': True,
+    #             'warehouse': {
+    #                 'id': warehouse_id,
+    #                 'name': app_warehouse.name,
+    #             },
+    #             'last_sync_time': last_sync.isoformat() if last_sync else None,
+    #             'current_sync_time': current_time.isoformat(),
+    #             'changes': {
+    #                 'created': created,
+    #                 'updated': updated,
+    #                 'validated': validated,
+    #                 'deleted': []
+    #             },
+    #             'summary': {
+    #                 'total_changes': len(created) + len(updated) + len(validated),
+    #                 'created_count': len(created),
+    #                 'updated_count': len(updated),
+    #                 'validated_count': len(validated),
+    #                 'deleted_count': 0
+    #             }
+    #         }
 
-#             return request.make_response(
-#                 json.dumps(response, default=str, ensure_ascii=False),
-#                 headers=[('Content-Type', 'application/json')],
-#                 status=200
-#             )
+    #         return request.make_response(
+    #             json.dumps(response, default=str, ensure_ascii=False),
+    #             headers=[('Content-Type', 'application/json')],
+    #             status=200
+    #         )
 
-#         except Exception as e:
-#             _logger.exception("Failed to fetch stock receipt sync data")
-#             return request.make_response(
-#                 json.dumps({'error': str(e), 'success': False}),
-#                 headers=[('Content-Type', 'application/json')],
-#                 status=500
-#             )
+    #     except Exception as e:
+    #         _logger.exception("Failed to fetch stock receipt sync data")
+    #         return request.make_response(
+    #             json.dumps({'error': str(e), 'success': False}),
+    #             headers=[('Content-Type', 'application/json')],
+    #             status=500
+    #         )
 
 #     @http.route('/api/stock/receive', type='http', auth='public', methods=['POST'], csrf=False)
 #     def receive_stock_picking(self, **kwargs):
