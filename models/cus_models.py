@@ -1621,6 +1621,21 @@ class PosSyncController(http.Controller):
                 order_data = order.get('data', {})
 
                 try:
+
+                    # ============================================================
+                    # STEP 0: Check for duplicate order
+                    # ============================================================
+                    if not order_id:
+                        errors.append(f"Order: Missing order_id - cannot process order without an ID")
+                        continue
+
+                    existing_order = request.env['sale.order'].sudo().search([
+                        ('client_order_ref', '=', order_id)
+                    ], limit=1)
+
+                    if existing_order:
+                        errors.append(f"Order {order_id}: Duplicate order - order_id '{order_id}' already exists (SO: {existing_order.name})")
+                        continue
                     # ============================================================
                     # STEP 1: Get or create customer
                     # ============================================================
@@ -1738,7 +1753,7 @@ class PosSyncController(http.Controller):
                         'order_line': order_lines,
                         'team_id': config.app_sales_team_id.id,  
                         'note': order_data.get('notes', ''),
-                        'client_order_ref': order_data.get('name', ''),
+                        'client_order_ref': order_id,
                         'user_id': config.app_user_id.id, 
                     })
 
