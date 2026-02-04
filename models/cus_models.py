@@ -1568,731 +1568,731 @@ class PosSyncController(http.Controller):
 
 
 
-    @http.route('/api/sales/create_order', type='json', auth='public', methods=['POST'])
-    def create_sale_order(self):
-        """
-        Create a sale order, create invoice, and register payment
-        Invoice will be marked as PAID (enforced)
+    # @http.route('/api/sales/create_order', type='json', auth='public', methods=['POST'])
+    # def create_sale_order(self):
+    #     """
+    #     Create a sale order, create invoice, and register payment
+    #     Invoice will be marked as PAID (enforced)
         
-        Expected payload:
-        {
-            "orders": [
-                {
-                    "id": "order_123",
-                    "data": {
-                        "name": "Order Reference",
-                        "customer": {
-                            "phone": "1234567890",
-                            "name": "Customer Name",
-                            "vat": "123456789"
-                        },
-                        "order_lines": [
-                            {
-                                "product_id": 1,
-                                "qty": 2,
-                                "price_unit": 100.0,
-                                "discount": 0
-                            }
-                        ],
-                        "notes": "Optional notes"
-                    }
-                }
-            ]
-        }
-        """
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    #     Expected payload:
+    #     {
+    #         "orders": [
+    #             {
+    #                 "id": "order_123",
+    #                 "data": {
+    #                     "name": "Order Reference",
+    #                     "customer": {
+    #                         "phone": "1234567890",
+    #                         "name": "Customer Name",
+    #                         "vat": "123456789"
+    #                     },
+    #                     "order_lines": [
+    #                         {
+    #                             "product_id": 1,
+    #                             "qty": 2,
+    #                             "price_unit": 100.0,
+    #                             "discount": 0
+    #                         }
+    #                     ],
+    #                     "notes": "Optional notes"
+    #                 }
+    #             }
+    #         ]
+    #     }
+    #     """
+    #     token = request.httprequest.headers.get('Authorization')
+    #     user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+    #     if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+    #         return {'error': 'Unauthorized or token expired'}, 401
 
-        try:
-            data = json.loads(request.httprequest.data)
-            orders = data.get('orders', [])
+    #     try:
+    #         data = json.loads(request.httprequest.data)
+    #         orders = data.get('orders', [])
 
-            if not orders:
-                return {'status': 'error', 'message': 'No orders provided'}
+    #         if not orders:
+    #             return {'status': 'error', 'message': 'No orders provided'}
 
-            created_orders = []
-            errors = []
+    #         created_orders = []
+    #         errors = []
 
-            for order in orders:
-                order_id = order.get('id')
-                order_data = order.get('data', {})
+    #         for order in orders:
+    #             order_id = order.get('id')
+    #             order_data = order.get('data', {})
 
-                try:
+    #             try:
 
-                    # ============================================================
-                    # STEP 0: Check for duplicate order
-                    # ============================================================
-                    if not order_id:
-                        errors.append(f"Order: Missing order_id - cannot process order without an ID")
-                        continue
+    #                 # ============================================================
+    #                 # STEP 0: Check for duplicate order
+    #                 # ============================================================
+    #                 if not order_id:
+    #                     errors.append(f"Order: Missing order_id - cannot process order without an ID")
+    #                     continue
 
-                    existing_order = request.env['sale.order'].sudo().search([
-                        ('client_order_ref', '=', order_id)
-                    ], limit=1)
+    #                 existing_order = request.env['sale.order'].sudo().search([
+    #                     ('client_order_ref', '=', order_id)
+    #                 ], limit=1)
 
-                    if existing_order:
-                        errors.append(f"Order {order_id}: Duplicate order - order_id '{order_id}' already exists (SO: {existing_order.name})")
-                        continue
-                    # ============================================================
-                    # STEP 1: Get or create customer
-                    # ============================================================
-                    customer_data = order_data.get('customer', {})
-                    phone = customer_data.get('phone')
-                    name = customer_data.get('name')
-                    vat = customer_data.get('vat')
+    #                 if existing_order:
+    #                     errors.append(f"Order {order_id}: Duplicate order - order_id '{order_id}' already exists (SO: {existing_order.name})")
+    #                     continue
+    #                 # ============================================================
+    #                 # STEP 1: Get or create customer
+    #                 # ============================================================
+    #                 customer_data = order_data.get('customer', {})
+    #                 phone = customer_data.get('phone')
+    #                 name = customer_data.get('name')
+    #                 vat = customer_data.get('vat')
 
-                    if not phone:
-                        errors.append(f"Order {order_id}: Customer phone is required")
-                        continue
+    #                 if not phone:
+    #                     errors.append(f"Order {order_id}: Customer phone is required")
+    #                     continue
                     
-                    partner = request.env['res.partner'].sudo().search([
-                        ('phone', '=', phone),
-                        ('customer_rank', '>', 0)
-                    ], limit=1)
+    #                 partner = request.env['res.partner'].sudo().search([
+    #                     ('phone', '=', phone),
+    #                     ('customer_rank', '>', 0)
+    #                 ], limit=1)
 
-                    if partner:
+    #                 if partner:
                        
 
-                        updates = {}
-                        if name and partner.name != name:
-                            updates['name'] = name
-                        if vat and partner.vat != vat:
-                            updates['vat'] = vat
-                        if updates:
-                            partner.write(updates)
-                    else:
-                        sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
+    #                     updates = {}
+    #                     if name and partner.name != name:
+    #                         updates['name'] = name
+    #                     if vat and partner.vat != vat:
+    #                         updates['vat'] = vat
+    #                     if updates:
+    #                         partner.write(updates)
+    #                 else:
+    #                     sa_country = request.env['res.country'].sudo().search([('code', '=', 'SA')], limit=1)
 
-                        partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
-                            'name': name or phone,
-                            'phone': phone,
-                            'vat': False,
-                            'customer_rank': 1,
-                            'country_id': sa_country.id,  # Saudi Arabia
-                        })
-                        print("******************************")
-                        print(partner.read()[0])
-                        # Force it via SQL
-                        request.env.cr.execute("""
-                            UPDATE res_partner 
-                            SET country_id = %s 
-                            WHERE id = %s
-                            """, (sa_country.id, partner.id,))
-
-
-                        partner.invalidate_recordset()
-
-                    # ============================================================
-                    # STEP 2: Get App warehouse (HARDCODED)
-                    # ============================================================
-                    # Get config
-                    config = get_sync_config()
-                    if not config:
-                        return {'status': 'error', 'message': 'Sync App not configured'}
-
-                    # The warehouse is already a record in config, no need to search again!
-                    app_warehouse = config.app_warehouse_id
-                    if not app_warehouse:
-                        return {'status': 'error', 'message': 'App warehouse not configured'}
-
-                    # Now use it directly
-                    warehouse_id = app_warehouse.id          # Get the ID
-                    warehouse_name = app_warehouse.name      # Get the name
+    #                     partner = request.env['res.partner'].sudo().with_context(force_save=True).create({
+    #                         'name': name or phone,
+    #                         'phone': phone,
+    #                         'vat': False,
+    #                         'customer_rank': 1,
+    #                         'country_id': sa_country.id,  # Saudi Arabia
+    #                     })
+    #                     print("******************************")
+    #                     print(partner.read()[0])
+    #                     # Force it via SQL
+    #                     request.env.cr.execute("""
+    #                         UPDATE res_partner 
+    #                         SET country_id = %s 
+    #                         WHERE id = %s
+    #                         """, (sa_country.id, partner.id,))
 
 
-                    if not config.app_payment_journal_id:
-                        return {'status': 'error', 'message': 'Payment journal not configured'}
+    #                     partner.invalidate_recordset()
+
+    #                 # ============================================================
+    #                 # STEP 2: Get App warehouse (HARDCODED)
+    #                 # ============================================================
+    #                 # Get config
+    #                 config = get_sync_config()
+    #                 if not config:
+    #                     return {'status': 'error', 'message': 'Sync App not configured'}
+
+    #                 # The warehouse is already a record in config, no need to search again!
+    #                 app_warehouse = config.app_warehouse_id
+    #                 if not app_warehouse:
+    #                     return {'status': 'error', 'message': 'App warehouse not configured'}
+
+    #                 # Now use it directly
+    #                 warehouse_id = app_warehouse.id          # Get the ID
+    #                 warehouse_name = app_warehouse.name      # Get the name
+
+
+    #                 if not config.app_payment_journal_id:
+    #                     return {'status': 'error', 'message': 'Payment journal not configured'}
 
             
-                    # app_warehouse = request.env['stock.warehouse'].sudo().search([
-                    #     ('name', '=', 'App')
-                    # ], limit=1)
+    #                 # app_warehouse = request.env['stock.warehouse'].sudo().search([
+    #                 #     ('name', '=', 'App')
+    #                 # ], limit=1)
 
-                    # if not app_warehouse:
-                    #     errors.append(f"Order {order_id}: App warehouse not found")
-                    #     continue
+    #                 # if not app_warehouse:
+    #                 #     errors.append(f"Order {order_id}: App warehouse not found")
+    #                 #     continue
 
-                    # ============================================================
-                    # STEP 3: Prepare order lines
-                    # ============================================================
-                    order_lines = []
+    #                 # ============================================================
+    #                 # STEP 3: Prepare order lines
+    #                 # ============================================================
+    #                 order_lines = []
                     
-                    for idx, line in enumerate(order_data.get('order_lines', [])):
-                        product_id = line.get('product_id')
-                        qty = line.get('qty', 0)
-                        price_unit = line.get('price_unit', 0)
-                        discount = line.get('discount', 0)
+    #                 for idx, line in enumerate(order_data.get('order_lines', [])):
+    #                     product_id = line.get('product_id')
+    #                     qty = line.get('qty', 0)
+    #                     price_unit = line.get('price_unit', 0)
+    #                     discount = line.get('discount', 0)
 
-                        product = request.env['product.product'].sudo().browse(product_id)
-                        if not product.exists():
-                            errors.append(f"Order {order_id}: Product {product_id} not found")
-                            continue
+    #                     product = request.env['product.product'].sudo().browse(product_id)
+    #                     if not product.exists():
+    #                         errors.append(f"Order {order_id}: Product {product_id} not found")
+    #                         continue
 
-                        # Add to sale order
-                        order_lines.append((0, 0, {
-                            'product_id': product_id,
-                            'product_uom_qty': abs(qty),
-                            'price_unit': price_unit,
-                            'discount': discount,
-                            'tax_id': [(6, 0, product.taxes_id.ids)] if product.taxes_id else False,
-                        }))
+    #                     # Add to sale order
+    #                     order_lines.append((0, 0, {
+    #                         'product_id': product_id,
+    #                         'product_uom_qty': abs(qty),
+    #                         'price_unit': price_unit,
+    #                         'discount': discount,
+    #                         'tax_id': [(6, 0, product.taxes_id.ids)] if product.taxes_id else False,
+    #                     }))
 
-                    if not order_lines:
-                        errors.append(f"Order {order_id}: No valid order lines")
-                        continue
+    #                 if not order_lines:
+    #                     errors.append(f"Order {order_id}: No valid order lines")
+    #                     continue
 
-                    # ============================================================
-                    # STEP 4: Create sale order (NO DELIVERY)
-                    # ============================================================
-                    sale_order = request.env['sale.order'].sudo().create({
-                        'partner_id': partner.id,
-                        'warehouse_id': warehouse_id,
-                        'order_line': order_lines,
-                        'team_id': config.app_sales_team_id.id,  
-                        'note': order_data.get('notes', ''),
-                        'client_order_ref': order_id,
-                        'user_id': config.app_user_id.id, 
-                    })
+    #                 # ============================================================
+    #                 # STEP 4: Create sale order (NO DELIVERY)
+    #                 # ============================================================
+    #                 sale_order = request.env['sale.order'].sudo().create({
+    #                     'partner_id': partner.id,
+    #                     'warehouse_id': warehouse_id,
+    #                     'order_line': order_lines,
+    #                     'team_id': config.app_sales_team_id.id,  
+    #                     'note': order_data.get('notes', ''),
+    #                     'client_order_ref': order_id,
+    #                     'user_id': config.app_user_id.id, 
+    #                 })
 
-                    _logger.info(f"✓ Created sale order {sale_order.name}")
+    #                 _logger.info(f"✓ Created sale order {sale_order.name}")
 
-                    # Confirm sale order
-                    sale_order.action_confirm()
+    #                 # Confirm sale order
+    #                 sale_order.action_confirm()
 
-                    # ============================================================
-                    # STEP 4.5: AUTO-VALIDATE DELIVERY
-                    # ============================================================
-                    try:
-                        for picking in sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel')):
-                            _logger.info(f"Auto-validating delivery {picking.name}")
+    #                 # ============================================================
+    #                 # STEP 4.5: AUTO-VALIDATE DELIVERY
+    #                 # ============================================================
+    #                 try:
+    #                     for picking in sale_order.picking_ids.filtered(lambda p: p.state not in ('done', 'cancel')):
+    #                         _logger.info(f"Auto-validating delivery {picking.name}")
                             
-                            # Ensure assigned
-                            if picking.state != 'assigned':
-                                picking.action_assign()
+    #                         # Ensure assigned
+    #                         if picking.state != 'assigned':
+    #                             picking.action_assign()
                             
-                            # Use immediate transfer (NO batch transfer)
-                            try:
-                                immediate_transfer = request.env['stock.immediate.transfer'].sudo().create({
-                                    'pick_ids': [(4, picking.id)]
-                                })
-                                immediate_transfer.process()
-                                _logger.info(f"✓ Delivery {picking.name} completed via immediate transfer")
-                            except:
-                                # Fallback: manual validation
-                                for move in picking.move_ids:
-                                    move.quantity_done = move.product_uom_qty
+    #                         # Use immediate transfer (NO batch transfer)
+    #                         try:
+    #                             immediate_transfer = request.env['stock.immediate.transfer'].sudo().create({
+    #                                 'pick_ids': [(4, picking.id)]
+    #                             })
+    #                             immediate_transfer.process()
+    #                             _logger.info(f"✓ Delivery {picking.name} completed via immediate transfer")
+    #                         except:
+    #                             # Fallback: manual validation
+    #                             for move in picking.move_ids:
+    #                                 move.quantity_done = move.product_uom_qty
                                 
-                                picking.with_context(
-                                    skip_backorder=True,
-                                    cancel_backorder=True,
-                                    skip_sms=True,
-                                ).button_validate()
-                                _logger.info(f"✓ Delivery {picking.name} validated manually")
+    #                             picking.with_context(
+    #                                 skip_backorder=True,
+    #                                 cancel_backorder=True,
+    #                                 skip_sms=True,
+    #                             ).button_validate()
+    #                             _logger.info(f"✓ Delivery {picking.name} validated manually")
 
-                    except Exception as delivery_error:
-                        _logger.error(f"Delivery validation error: {str(delivery_error)}")
+    #                 except Exception as delivery_error:
+    #                     _logger.error(f"Delivery validation error: {str(delivery_error)}")
 
 
-                        # Don't stop the process, continue to invoicing
+    #                     # Don't stop the process, continue to invoicing
 
-                    # ============================================================
-                    # STEP 5: Create invoice directly
-                    # ============================================================
-                    invoice = None
-                    try:
-                        # Create invoice from sale order
-                        invoice = sale_order._create_invoices()
+    #                 # ============================================================
+    #                 # STEP 5: Create invoice directly
+    #                 # ============================================================
+    #                 invoice = None
+    #                 try:
+    #                     # Create invoice from sale order
+    #                     invoice = sale_order._create_invoices()
                         
-                        if not invoice:
-                            errors.append(f"Order {order_id}: Failed to create invoice")
-                            continue
+    #                     if not invoice:
+    #                         errors.append(f"Order {order_id}: Failed to create invoice")
+    #                         continue
                         
-                        # Post the invoice
-                        invoice.action_post()
-                        _logger.info(f"✓ Invoice {invoice.name} posted, Amount: {invoice.amount_total}")
+    #                     # Post the invoice
+    #                     invoice.action_post()
+    #                     _logger.info(f"✓ Invoice {invoice.name} posted, Amount: {invoice.amount_total}")
 
-                    except Exception as invoice_error:
-                        _logger.error(f"Invoice creation failed: {str(invoice_error)}")
-                        errors.append(f"Order {order_id}: Invoice failed - {str(invoice_error)}")
-                        continue
+    #                 except Exception as invoice_error:
+    #                     _logger.error(f"Invoice creation failed: {str(invoice_error)}")
+    #                     errors.append(f"Order {order_id}: Invoice failed - {str(invoice_error)}")
+    #                     continue
 
-                    # ============================================================
-                    # STEP 6: Register payment and FORCE reconciliation (ENFORCED)
-                    # ============================================================
-                    payment = None
+    #                 # ============================================================
+    #                 # STEP 6: Register payment and FORCE reconciliation (ENFORCED)
+    #                 # ============================================================
+    #                 payment = None
 
-                    try:
-                        # Ensure invoice is in correct state
-                        if invoice.state != 'posted':
-                            invoice.action_post()
-                            _logger.info(f"✓ Invoice {invoice.name} posted")
+    #                 try:
+    #                     # Ensure invoice is in correct state
+    #                     if invoice.state != 'posted':
+    #                         invoice.action_post()
+    #                         _logger.info(f"✓ Invoice {invoice.name} posted")
                         
-                        # Get the payment method (account.journal) with ID = 8
-                        journal = config.app_payment_journal_id
-                        # Already validated above, but can double-check
-                        if not journal:
-                            errors.append(f"Order {order_id}: Payment journal not configured")
-                            continue
+    #                     # Get the payment method (account.journal) with ID = 8
+    #                     journal = config.app_payment_journal_id
+    #                     # Already validated above, but can double-check
+    #                     if not journal:
+    #                         errors.append(f"Order {order_id}: Payment journal not configured")
+    #                         continue
 
-                        _logger.info(f"Using payment journal: {journal.name} (ID: {journal.id})")
+    #                     _logger.info(f"Using payment journal: {journal.name} (ID: {journal.id})")
 
-                        # Use journal in payment registration
-                        payment_register = request.env['account.payment.register'].sudo().with_context(
-                            active_model='account.move',
-                            active_ids=invoice.ids
-                        ).create({
-                            'journal_id': journal.id,
-                            'payment_date': fields.Date.today(),
-                        })
+    #                     # Use journal in payment registration
+    #                     payment_register = request.env['account.payment.register'].sudo().with_context(
+    #                         active_model='account.move',
+    #                         active_ids=invoice.ids
+    #                     ).create({
+    #                         'journal_id': journal.id,
+    #                         'payment_date': fields.Date.today(),
+    #                     })
                         
-                        if not journal.exists():
-                            errors.append(f"Order {order_id}: Payment method with ID 8 not found")
-                            continue
+    #                     if not journal.exists():
+    #                         errors.append(f"Order {order_id}: Payment method with ID 8 not found")
+    #                         continue
 
-                        _logger.info(f"Using payment journal: {journal.name} (ID: {journal.id})")
+    #                     _logger.info(f"Using payment journal: {journal.name} (ID: {journal.id})")
 
-                        # METHOD 1: Try using payment register wizard
-                        try:
-                            payment_register = request.env['account.payment.register'].sudo().with_context(
-                                active_model='account.move',
-                                active_ids=invoice.ids
-                            ).create({
-                                'journal_id': journal.id,
-                                'payment_date': fields.Date.today(),
-                            })
+    #                     # METHOD 1: Try using payment register wizard
+    #                     try:
+    #                         payment_register = request.env['account.payment.register'].sudo().with_context(
+    #                             active_model='account.move',
+    #                             active_ids=invoice.ids
+    #                         ).create({
+    #                             'journal_id': journal.id,
+    #                             'payment_date': fields.Date.today(),
+    #                         })
                             
-                            # Process the payment
-                            payment_result = payment_register.action_create_payments()
+    #                         # Process the payment
+    #                         payment_result = payment_register.action_create_payments()
                             
-                            # Get the created payment
-                            if isinstance(payment_result, dict) and 'res_id' in payment_result:
-                                payment = request.env['account.payment'].sudo().browse(payment_result['res_id'])
-                            else:
-                                payment = invoice._get_reconciled_payments()[:1] if hasattr(invoice, '_get_reconciled_payments') else None
-                                if not payment:
-                                    payment = invoice.payment_ids.filtered(lambda p: p.state == 'posted').sorted('id', reverse=True)[:1]
+    #                         # Get the created payment
+    #                         if isinstance(payment_result, dict) and 'res_id' in payment_result:
+    #                             payment = request.env['account.payment'].sudo().browse(payment_result['res_id'])
+    #                         else:
+    #                             payment = invoice._get_reconciled_payments()[:1] if hasattr(invoice, '_get_reconciled_payments') else None
+    #                             if not payment:
+    #                                 payment = invoice.payment_ids.filtered(lambda p: p.state == 'posted').sorted('id', reverse=True)[:1]
                             
-                            if payment:
-                                _logger.info(f"✓ Payment created via wizard: {payment.name}, Amount: {payment.amount}")
+    #                         if payment:
+    #                             _logger.info(f"✓ Payment created via wizard: {payment.name}, Amount: {payment.amount}")
                         
-                        except Exception as wizard_error:
-                            _logger.warning(f"Payment wizard failed: {str(wizard_error)}, trying direct payment creation")
-                            payment = None
+    #                     except Exception as wizard_error:
+    #                         _logger.warning(f"Payment wizard failed: {str(wizard_error)}, trying direct payment creation")
+    #                         payment = None
                         
-                        # METHOD 2: Direct payment creation if wizard failed
-                        if not payment:
-                            try:
-                                payment = request.env['account.payment'].sudo().create({
-                                    'payment_type': 'inbound',
-                                    'partner_type': 'customer',
-                                    'partner_id': invoice.partner_id.id,
-                                    'amount': invoice.amount_residual,
-                                    'currency_id': invoice.currency_id.id,
-                                    'date': fields.Date.today(),
-                                    'journal_id': journal.id,
-                                    'ref': f"Payment for {invoice.name}",
-                                })
-                                payment.action_post()
-                                _logger.info(f"✓ Payment created directly: {payment.name}, Amount: {payment.amount}")
+    #                     # METHOD 2: Direct payment creation if wizard failed
+    #                     if not payment:
+    #                         try:
+    #                             payment = request.env['account.payment'].sudo().create({
+    #                                 'payment_type': 'inbound',
+    #                                 'partner_type': 'customer',
+    #                                 'partner_id': invoice.partner_id.id,
+    #                                 'amount': invoice.amount_residual,
+    #                                 'currency_id': invoice.currency_id.id,
+    #                                 'date': fields.Date.today(),
+    #                                 'journal_id': journal.id,
+    #                                 'ref': f"Payment for {invoice.name}",
+    #                             })
+    #                             payment.action_post()
+    #                             _logger.info(f"✓ Payment created directly: {payment.name}, Amount: {payment.amount}")
                             
-                            except Exception as direct_error:
-                                _logger.error(f"Direct payment creation failed: {str(direct_error)}")
-                                errors.append(f"Order {order_id}: Payment creation failed - {str(direct_error)}")
-                                continue
+    #                         except Exception as direct_error:
+    #                             _logger.error(f"Direct payment creation failed: {str(direct_error)}")
+    #                             errors.append(f"Order {order_id}: Payment creation failed - {str(direct_error)}")
+    #                             continue
                         
-                        # ============================================================
-                        # AGGRESSIVE RECONCILIATION - Multiple attempts
-                        # ============================================================
+    #                     # ============================================================
+    #                     # AGGRESSIVE RECONCILIATION - Multiple attempts
+    #                     # ============================================================
                         
-                        # Refresh both invoice and payment
-                        invoice.invalidate_recordset()
-                        payment.invalidate_recordset()
+    #                     # Refresh both invoice and payment
+    #                     invoice.invalidate_recordset()
+    #                     payment.invalidate_recordset()
                         
-                        # Attempt 1: Standard reconciliation
-                        try:
-                            invoice_lines = invoice.line_ids.filtered(
-                                lambda l: l.account_id.account_type == 'asset_receivable' 
-                                and not l.reconciled 
-                                and l.balance != 0
-                            )
+    #                     # Attempt 1: Standard reconciliation
+    #                     try:
+    #                         invoice_lines = invoice.line_ids.filtered(
+    #                             lambda l: l.account_id.account_type == 'asset_receivable' 
+    #                             and not l.reconciled 
+    #                             and l.balance != 0
+    #                         )
                             
-                            payment_lines = payment.line_ids.filtered(
-                                lambda l: l.account_id.account_type == 'asset_receivable' 
-                                and not l.reconciled 
-                                and l.balance != 0
-                            )
+    #                         payment_lines = payment.line_ids.filtered(
+    #                             lambda l: l.account_id.account_type == 'asset_receivable' 
+    #                             and not l.reconciled 
+    #                             and l.balance != 0
+    #                         )
                             
-                            lines_to_reconcile = invoice_lines | payment_lines
+    #                         lines_to_reconcile = invoice_lines | payment_lines
                             
-                            if lines_to_reconcile and len(lines_to_reconcile) >= 2:
-                                lines_to_reconcile.sudo().reconcile()
-                                _logger.info(f"✓ Attempt 1: Standard reconciliation - {len(lines_to_reconcile)} lines")
-                            else:
-                                _logger.warning(f"Not enough lines for standard reconciliation: {len(lines_to_reconcile)}")
+    #                         if lines_to_reconcile and len(lines_to_reconcile) >= 2:
+    #                             lines_to_reconcile.sudo().reconcile()
+    #                             _logger.info(f"✓ Attempt 1: Standard reconciliation - {len(lines_to_reconcile)} lines")
+    #                         else:
+    #                             _logger.warning(f"Not enough lines for standard reconciliation: {len(lines_to_reconcile)}")
                         
-                        except Exception as reconcile_error:
-                            _logger.warning(f"Standard reconciliation failed: {str(reconcile_error)}")
+    #                     except Exception as reconcile_error:
+    #                         _logger.warning(f"Standard reconciliation failed: {str(reconcile_error)}")
                         
-                        # Attempt 2: Use js_assign_outstanding_line
-                        try:
-                            invoice.invalidate_recordset()
-                            if invoice.payment_state != 'paid':
-                                # Get outstanding credits
-                                outstanding = invoice._get_reconciled_info_JSON_values()
-                                if outstanding:
-                                    for credit in outstanding:
-                                        try:
-                                            invoice.js_assign_outstanding_line(credit['id'])
-                                            _logger.info(f"✓ Attempt 2: Assigned outstanding line {credit['id']}")
-                                        except:
-                                            pass
-                        except Exception as outstanding_error:
-                            _logger.warning(f"Outstanding line assignment failed: {str(outstanding_error)}")
+    #                     # Attempt 2: Use js_assign_outstanding_line
+    #                     try:
+    #                         invoice.invalidate_recordset()
+    #                         if invoice.payment_state != 'paid':
+    #                             # Get outstanding credits
+    #                             outstanding = invoice._get_reconciled_info_JSON_values()
+    #                             if outstanding:
+    #                                 for credit in outstanding:
+    #                                     try:
+    #                                         invoice.js_assign_outstanding_line(credit['id'])
+    #                                         _logger.info(f"✓ Attempt 2: Assigned outstanding line {credit['id']}")
+    #                                     except:
+    #                                         pass
+    #                     except Exception as outstanding_error:
+    #                         _logger.warning(f"Outstanding line assignment failed: {str(outstanding_error)}")
                         
-                        # Attempt 3: Manual reconciliation using account.partial.reconcile
-                        try:
-                            invoice.invalidate_recordset()
-                            if invoice.payment_state != 'paid':
-                                debit_lines = invoice.line_ids.filtered(
-                                    lambda l: l.account_id.account_type == 'asset_receivable' and l.debit > 0 and not l.reconciled
-                                )
-                                credit_lines = payment.line_ids.filtered(
-                                    lambda l: l.account_id.account_type == 'asset_receivable' and l.credit > 0 and not l.reconciled
-                                )
+    #                     # Attempt 3: Manual reconciliation using account.partial.reconcile
+    #                     try:
+    #                         invoice.invalidate_recordset()
+    #                         if invoice.payment_state != 'paid':
+    #                             debit_lines = invoice.line_ids.filtered(
+    #                                 lambda l: l.account_id.account_type == 'asset_receivable' and l.debit > 0 and not l.reconciled
+    #                             )
+    #                             credit_lines = payment.line_ids.filtered(
+    #                                 lambda l: l.account_id.account_type == 'asset_receivable' and l.credit > 0 and not l.reconciled
+    #                             )
                                 
-                                if debit_lines and credit_lines:
-                                    for debit_line in debit_lines:
-                                        for credit_line in credit_lines:
-                                            if abs(debit_line.balance + credit_line.balance) < 0.01:  # Same amount
-                                                request.env['account.partial.reconcile'].sudo().create({
-                                                    'debit_move_id': debit_line.id,
-                                                    'credit_move_id': credit_line.id,
-                                                    'amount': min(abs(debit_line.balance), abs(credit_line.balance)),
-                                                })
-                                                _logger.info(f"✓ Attempt 3: Manual partial reconcile created")
-                        except Exception as manual_error:
-                            _logger.warning(f"Manual reconciliation failed: {str(manual_error)}")
+    #                             if debit_lines and credit_lines:
+    #                                 for debit_line in debit_lines:
+    #                                     for credit_line in credit_lines:
+    #                                         if abs(debit_line.balance + credit_line.balance) < 0.01:  # Same amount
+    #                                             request.env['account.partial.reconcile'].sudo().create({
+    #                                                 'debit_move_id': debit_line.id,
+    #                                                 'credit_move_id': credit_line.id,
+    #                                                 'amount': min(abs(debit_line.balance), abs(credit_line.balance)),
+    #                                             })
+    #                                             _logger.info(f"✓ Attempt 3: Manual partial reconcile created")
+    #                     except Exception as manual_error:
+    #                         _logger.warning(f"Manual reconciliation failed: {str(manual_error)}")
                         
-                        # ============================================================
-                        # FINAL VERIFICATION AND FORCE COMMIT
-                        # ============================================================
+    #                     # ============================================================
+    #                     # FINAL VERIFICATION AND FORCE COMMIT
+    #                     # ============================================================
                         
-                        # Force database commit
-                        request.env.cr.commit()
+    #                     # Force database commit
+    #                     request.env.cr.commit()
                         
-                        # Re-browse to get fresh data
-                        invoice = request.env['account.move'].sudo().browse(invoice.id)
-                        payment = request.env['account.payment'].sudo().browse(payment.id)
+    #                     # Re-browse to get fresh data
+    #                     invoice = request.env['account.move'].sudo().browse(invoice.id)
+    #                     payment = request.env['account.payment'].sudo().browse(payment.id)
                         
-                        # Final check
-                        final_payment_state = invoice.payment_state
-                        final_amount_residual = invoice.amount_residual
+    #                     # Final check
+    #                     final_payment_state = invoice.payment_state
+    #                     final_amount_residual = invoice.amount_residual
                         
-                        _logger.info(f"{'='*60}")
-                        _logger.info(f"FINAL VERIFICATION:")
-                        _logger.info(f"  Invoice: {invoice.name}")
-                        _logger.info(f"  Payment State: {final_payment_state}")
-                        _logger.info(f"  Amount Residual: {final_amount_residual}")
-                        _logger.info(f"  Invoice State: {invoice.state}")
-                        _logger.info(f"  Payment: {payment.name}")
-                        _logger.info(f"  Payment State: {payment.state}")
-                        _logger.info(f"  Payment Amount: {payment.amount}")
-                        _logger.info(f"{'='*60}")
+    #                     _logger.info(f"{'='*60}")
+    #                     _logger.info(f"FINAL VERIFICATION:")
+    #                     _logger.info(f"  Invoice: {invoice.name}")
+    #                     _logger.info(f"  Payment State: {final_payment_state}")
+    #                     _logger.info(f"  Amount Residual: {final_amount_residual}")
+    #                     _logger.info(f"  Invoice State: {invoice.state}")
+    #                     _logger.info(f"  Payment: {payment.name}")
+    #                     _logger.info(f"  Payment State: {payment.state}")
+    #                     _logger.info(f"  Payment Amount: {payment.amount}")
+    #                     _logger.info(f"{'='*60}")
                         
-                        if final_payment_state != 'paid':
-                            _logger.error(f"❌ FAILED TO MARK AS PAID - Payment State: {final_payment_state}")
-                            _logger.error(f"   Amount Residual: {final_amount_residual}")
+    #                     if final_payment_state != 'paid':
+    #                         _logger.error(f"❌ FAILED TO MARK AS PAID - Payment State: {final_payment_state}")
+    #                         _logger.error(f"   Amount Residual: {final_amount_residual}")
                             
-                            # Debug: Show reconciliation status
-                            for line in invoice.line_ids:
-                                if line.account_id.account_type == 'asset_receivable':
-                                    _logger.error(f"   Invoice Line {line.id}: reconciled={line.reconciled}, "
-                                                f"debit={line.debit}, credit={line.credit}, balance={line.balance}")
+    #                         # Debug: Show reconciliation status
+    #                         for line in invoice.line_ids:
+    #                             if line.account_id.account_type == 'asset_receivable':
+    #                                 _logger.error(f"   Invoice Line {line.id}: reconciled={line.reconciled}, "
+    #                                             f"debit={line.debit}, credit={line.credit}, balance={line.balance}")
                             
-                            for line in payment.line_ids:
-                                if line.account_id.account_type == 'asset_receivable':
-                                    _logger.error(f"   Payment Line {line.id}: reconciled={line.reconciled}, "
-                                                f"debit={line.debit}, credit={line.credit}, balance={line.balance}")
+    #                         for line in payment.line_ids:
+    #                             if line.account_id.account_type == 'asset_receivable':
+    #                                 _logger.error(f"   Payment Line {line.id}: reconciled={line.reconciled}, "
+    #                                             f"debit={line.debit}, credit={line.credit}, balance={line.balance}")
                             
-                            # Last resort: Try to force payment_state
-                            try:
-                                invoice.write({'payment_state': 'paid'})
-                                request.env.cr.commit()
-                                _logger.warning(f"⚠️  FORCED payment_state to 'paid' (last resort)")
-                                final_payment_state = 'paid'
-                            except Exception as force_error:
-                                _logger.error(f"Cannot force payment state: {str(force_error)}")
+    #                         # Last resort: Try to force payment_state
+    #                         try:
+    #                             invoice.write({'payment_state': 'paid'})
+    #                             request.env.cr.commit()
+    #                             _logger.warning(f"⚠️  FORCED payment_state to 'paid' (last resort)")
+    #                             final_payment_state = 'paid'
+    #                         except Exception as force_error:
+    #                             _logger.error(f"Cannot force payment state: {str(force_error)}")
 
-                    except Exception as payment_error:
-                        _logger.error(f"Payment process failed: {str(payment_error)}")
-                        import traceback
-                        _logger.error(traceback.format_exc())
-                        errors.append(f"Order {order_id}: Payment failed - {str(payment_error)}")
+    #                 except Exception as payment_error:
+    #                     _logger.error(f"Payment process failed: {str(payment_error)}")
+    #                     import traceback
+    #                     _logger.error(traceback.format_exc())
+    #                     errors.append(f"Order {order_id}: Payment failed - {str(payment_error)}")
 
-                    # ============================================================
-                    # STEP 7: Build response
-                    # ============================================================
+    #                 # ============================================================
+    #                 # STEP 7: Build response
+    #                 # ============================================================
                     
-                    # Get delivery information
-                    delivery_info = []
-                    for picking in sale_order.picking_ids:
-                        delivery_info.append({
-                            'picking_id': picking.id,
-                            'picking_name': picking.name,
-                            'picking_state': picking.state,
-                            'picking_type': picking.picking_type_id.name,
-                            'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
-                        })
+    #                 # Get delivery information
+    #                 delivery_info = []
+    #                 for picking in sale_order.picking_ids:
+    #                     delivery_info.append({
+    #                         'picking_id': picking.id,
+    #                         'picking_name': picking.name,
+    #                         'picking_state': picking.state,
+    #                         'picking_type': picking.picking_type_id.name,
+    #                         'scheduled_date': picking.scheduled_date.isoformat() if picking.scheduled_date else None,
+    #                     })
                     
-                    created_orders.append({
-                        'order_id': order_id,
-                        'sale_order_id': sale_order.id,
-                        'sale_order_name': sale_order.name,
-                        'sale_order_state': sale_order.state,
-                        'amount_total': sale_order.amount_total,
-                        'delivery_status': delivery_info,
-                        'invoice_id': invoice.id if invoice else None,
-                        'invoice_name': invoice.name if invoice else None,
-                        'invoice_state': invoice.state if invoice else None,
-                        'invoice_amount': invoice.amount_total if invoice else 0,
-                        'payment_state': final_payment_state if invoice else 'not_paid',
-                        'payment_id': payment.id if payment else None,
-                        'payment_name': payment.name if payment else None,
-                        'payment_amount': payment.amount if payment else 0,
-                        'payment_state_detail': payment.state if payment else 'not_created',
-                        'payment_date': payment.date.isoformat() if payment and payment.date else None,
-                    })
+    #                 created_orders.append({
+    #                     'order_id': order_id,
+    #                     'sale_order_id': sale_order.id,
+    #                     'sale_order_name': sale_order.name,
+    #                     'sale_order_state': sale_order.state,
+    #                     'amount_total': sale_order.amount_total,
+    #                     'delivery_status': delivery_info,
+    #                     'invoice_id': invoice.id if invoice else None,
+    #                     'invoice_name': invoice.name if invoice else None,
+    #                     'invoice_state': invoice.state if invoice else None,
+    #                     'invoice_amount': invoice.amount_total if invoice else 0,
+    #                     'payment_state': final_payment_state if invoice else 'not_paid',
+    #                     'payment_id': payment.id if payment else None,
+    #                     'payment_name': payment.name if payment else None,
+    #                     'payment_amount': payment.amount if payment else 0,
+    #                     'payment_state_detail': payment.state if payment else 'not_created',
+    #                     'payment_date': payment.date.isoformat() if payment and payment.date else None,
+    #                 })
                     
-                    _logger.info(f"✓✓✓ Order {order_id} COMPLETED - Invoice Payment State: {final_payment_state} ✓✓✓")
+    #                 _logger.info(f"✓✓✓ Order {order_id} COMPLETED - Invoice Payment State: {final_payment_state} ✓✓✓")
 
-                except Exception as e:
-                    _logger.exception(f"Failed to create sale order {order_id}")
-                    errors.append(f"Order {order_id}: {str(e)}")
+    #             except Exception as e:
+    #                 _logger.exception(f"Failed to create sale order {order_id}")
+    #                 errors.append(f"Order {order_id}: {str(e)}")
 
-            return {
-                'status': 'success' if not errors else 'partial_success',
-                'created_orders': created_orders,
-                'errors': errors if errors else None,
-                'summary': {
-                    'total_orders': len(orders),
-                    'successful_orders': len(created_orders),
-                    'failed_orders': len(errors)
-                }
-            }
+    #         return {
+    #             'status': 'success' if not errors else 'partial_success',
+    #             'created_orders': created_orders,
+    #             'errors': errors if errors else None,
+    #             'summary': {
+    #                 'total_orders': len(orders),
+    #                 'successful_orders': len(created_orders),
+    #                 'failed_orders': len(errors)
+    #             }
+    #         }
 
-        except Exception as e:
-            _logger.exception("Failed to create sale orders")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+    #     except Exception as e:
+    #         _logger.exception("Failed to create sale orders")
+    #         return {
+    #             'status': 'error',
+    #             'message': str(e)
+    #         }
         
 
 
-    @http.route('/api/sales/return_order', type='json', auth='public', methods=['POST'])
-    def return_sale_order(self):
-        """
-        Return a sale order and create credit note
-        No delivery check - direct credit note creation
+    # @http.route('/api/sales/return_order', type='json', auth='public', methods=['POST'])
+    # def return_sale_order(self):
+    #     """
+    #     Return a sale order and create credit note
+    #     No delivery check - direct credit note creation
         
-        Expected payload:
-        {
-            "returns": [
-                {
-                    "sale_order_name": "SO001",
-                    "return_lines": [
-                        {
-                            "product_id": 1,
-                            "qty": 2,
-                            "price_unit": 100.0
-                        }
-                    ],
-                    "reason": "Customer return"
-                }
-            ]
-        }
-        """
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    #     Expected payload:
+    #     {
+    #         "returns": [
+    #             {
+    #                 "sale_order_name": "SO001",
+    #                 "return_lines": [
+    #                     {
+    #                         "product_id": 1,
+    #                         "qty": 2,
+    #                         "price_unit": 100.0
+    #                     }
+    #                 ],
+    #                 "reason": "Customer return"
+    #             }
+    #         ]
+    #     }
+    #     """
+    #     token = request.httprequest.headers.get('Authorization')
+    #     user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+    #     if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+    #         return {'error': 'Unauthorized or token expired'}, 401
 
-        try:
-            data = json.loads(request.httprequest.data)
-            returns = data.get('returns', [])
+    #     try:
+    #         data = json.loads(request.httprequest.data)
+    #         returns = data.get('returns', [])
 
-            if not returns:
-                return {'status': 'error', 'message': 'No returns provided'}
+    #         if not returns:
+    #             return {'status': 'error', 'message': 'No returns provided'}
 
-            processed_returns = []
-            errors = []
+    #         processed_returns = []
+    #         errors = []
 
-            for return_data in returns:
-                sale_order_name = return_data.get('sale_order_name')
-                return_lines = return_data.get('return_lines', [])
-                reason = return_data.get('reason', 'Customer return')
+    #         for return_data in returns:
+    #             sale_order_name = return_data.get('sale_order_name')
+    #             return_lines = return_data.get('return_lines', [])
+    #             reason = return_data.get('reason', 'Customer return')
 
-                try:
-                    # ============================================================
-                    # STEP 1: Find the sale order
-                    # ============================================================
-                    sale_order = request.env['sale.order'].sudo().search([
-                        ('name', '=', sale_order_name)
-                    ], limit=1)
+    #             try:
+    #                 # ============================================================
+    #                 # STEP 1: Find the sale order
+    #                 # ============================================================
+    #                 sale_order = request.env['sale.order'].sudo().search([
+    #                     ('name', '=', sale_order_name)
+    #                 ], limit=1)
 
-                    if not sale_order:
-                        errors.append(f"Sale order {sale_order_name} not found")
-                        continue
+    #                 if not sale_order:
+    #                     errors.append(f"Sale order {sale_order_name} not found")
+    #                     continue
 
-                    if sale_order.state == 'cancel':
-                        errors.append(f"Sale order {sale_order_name} is already cancelled")
-                        continue
+    #                 if sale_order.state == 'cancel':
+    #                     errors.append(f"Sale order {sale_order_name} is already cancelled")
+    #                     continue
 
-                    # Validate return_lines
-                    if not return_lines:
-                        errors.append(f"Sale order {sale_order_name}: No return lines provided")
-                        continue
+    #                 # Validate return_lines
+    #                 if not return_lines:
+    #                     errors.append(f"Sale order {sale_order_name}: No return lines provided")
+    #                     continue
 
-                    valid_lines = [line for line in return_lines if line.get('qty', 0) > 0]
-                    if not valid_lines:
-                        errors.append(f"Sale order {sale_order_name}: No valid return lines (qty must be > 0)")
-                        continue
+    #                 valid_lines = [line for line in return_lines if line.get('qty', 0) > 0]
+    #                 if not valid_lines:
+    #                     errors.append(f"Sale order {sale_order_name}: No valid return lines (qty must be > 0)")
+    #                     continue
 
-                    _logger.info(f"Processing return for {sale_order_name} with {len(valid_lines)} valid lines")
+    #                 _logger.info(f"Processing return for {sale_order_name} with {len(valid_lines)} valid lines")
 
-                    # ============================================================
-                    # STEP 2: Create credit note directly (no delivery check)
-                    # ============================================================
-                    credit_note = None
-                    invoices = sale_order.invoice_ids.filtered(
-                        lambda inv: inv.state == 'posted' and inv.move_type == 'out_invoice'
-                    )
+    #                 # ============================================================
+    #                 # STEP 2: Create credit note directly (no delivery check)
+    #                 # ============================================================
+    #                 credit_note = None
+    #                 invoices = sale_order.invoice_ids.filtered(
+    #                     lambda inv: inv.state == 'posted' and inv.move_type == 'out_invoice'
+    #                 )
                     
-                    if not invoices:
-                        errors.append(f"Sale order {sale_order_name}: No posted invoices found")
-                        continue
+    #                 if not invoices:
+    #                     errors.append(f"Sale order {sale_order_name}: No posted invoices found")
+    #                     continue
 
-                    invoice = invoices[0]
+    #                 invoice = invoices[0]
                     
-                    _logger.info(f"Creating credit note from invoice {invoice.name}")
+    #                 _logger.info(f"Creating credit note from invoice {invoice.name}")
                     
-                    # Create credit note with specified lines
-                    credit_note = request.env['account.move'].sudo().create({
-                        'move_type': 'out_refund',
-                        'partner_id': invoice.partner_id.id,
-                        'invoice_origin': invoice.name,
-                        'invoice_date': fields.Date.today(),
-                        'journal_id': invoice.journal_id.id,
-                        'ref': reason,
-                        'currency_id': invoice.currency_id.id,
-                        'fiscal_position_id': invoice.fiscal_position_id.id if invoice.fiscal_position_id else False,
-                    })
+    #                 # Create credit note with specified lines
+    #                 credit_note = request.env['account.move'].sudo().create({
+    #                     'move_type': 'out_refund',
+    #                     'partner_id': invoice.partner_id.id,
+    #                     'invoice_origin': invoice.name,
+    #                     'invoice_date': fields.Date.today(),
+    #                     'journal_id': invoice.journal_id.id,
+    #                     'ref': reason,
+    #                     'currency_id': invoice.currency_id.id,
+    #                     'fiscal_position_id': invoice.fiscal_position_id.id if invoice.fiscal_position_id else False,
+    #                 })
                     
-                    # Add credit note lines
-                    credit_lines_added = 0
-                    for ret_line in valid_lines:
-                        product_id = ret_line.get('product_id')
-                        qty = ret_line.get('qty', 0)
-                        price_unit = ret_line.get('price_unit', 0)
+    #                 # Add credit note lines
+    #                 credit_lines_added = 0
+    #                 for ret_line in valid_lines:
+    #                     product_id = ret_line.get('product_id')
+    #                     qty = ret_line.get('qty', 0)
+    #                     price_unit = ret_line.get('price_unit', 0)
                         
-                        # Find the original invoice line
-                        original_lines = invoice.invoice_line_ids.filtered(
-                            lambda l: l.product_id.id == product_id
-                        )
+    #                     # Find the original invoice line
+    #                     original_lines = invoice.invoice_line_ids.filtered(
+    #                         lambda l: l.product_id.id == product_id
+    #                     )
                         
-                        if not original_lines:
-                            _logger.warning(f"No invoice line found for product {product_id}")
-                            continue
+    #                     if not original_lines:
+    #                         _logger.warning(f"No invoice line found for product {product_id}")
+    #                         continue
                         
-                        line = original_lines[0]
+    #                     line = original_lines[0]
                         
-                        # Validate quantity
-                        if qty > line.quantity:
-                            _logger.warning(f"Return qty {qty} exceeds invoice qty {line.quantity} for product {product_id}")
-                            qty = line.quantity
+    #                     # Validate quantity
+    #                     if qty > line.quantity:
+    #                         _logger.warning(f"Return qty {qty} exceeds invoice qty {line.quantity} for product {product_id}")
+    #                         qty = line.quantity
                         
-                        # Create credit note line
-                        request.env['account.move.line'].sudo().with_context(
-                            check_move_validity=False
-                        ).create({
-                            'move_id': credit_note.id,
-                            'product_id': product_id,
-                            'name': line.name,
-                            'quantity': qty,
-                            'price_unit': price_unit,
-                            'account_id': line.account_id.id,
-                            'tax_ids': [(6, 0, line.tax_ids.ids)],
-                            'product_uom_id': line.product_uom_id.id,
-                        })
+    #                     # Create credit note line
+    #                     request.env['account.move.line'].sudo().with_context(
+    #                         check_move_validity=False
+    #                     ).create({
+    #                         'move_id': credit_note.id,
+    #                         'product_id': product_id,
+    #                         'name': line.name,
+    #                         'quantity': qty,
+    #                         'price_unit': price_unit,
+    #                         'account_id': line.account_id.id,
+    #                         'tax_ids': [(6, 0, line.tax_ids.ids)],
+    #                         'product_uom_id': line.product_uom_id.id,
+    #                     })
                         
-                        credit_lines_added += 1
-                        _logger.info(f"✓ Added credit line: Product {product_id}, Qty {qty}, Price {price_unit}")
+    #                     credit_lines_added += 1
+    #                     _logger.info(f"✓ Added credit line: Product {product_id}, Qty {qty}, Price {price_unit}")
                     
-                    if credit_lines_added == 0:
-                        credit_note.sudo().unlink()
-                        errors.append(f"Sale order {sale_order_name}: No valid credit note lines created")
-                        continue
+    #                 if credit_lines_added == 0:
+    #                     credit_note.sudo().unlink()
+    #                     errors.append(f"Sale order {sale_order_name}: No valid credit note lines created")
+    #                     continue
                     
-                    # Force recompute totals
-                    try:
-                        credit_note._compute_amount()
-                    except:
-                        try:
-                            credit_note._recompute_payment_terms_lines()
-                        except:
-                            credit_note.invalidate_cache(['amount_total', 'amount_tax', 'amount_untaxed'])
+    #                 # Force recompute totals
+    #                 try:
+    #                     credit_note._compute_amount()
+    #                 except:
+    #                     try:
+    #                         credit_note._recompute_payment_terms_lines()
+    #                     except:
+    #                         credit_note.invalidate_cache(['amount_total', 'amount_tax', 'amount_untaxed'])
                     
-                    # Post the credit note
-                    credit_note.action_post()
-                    _logger.info(f"✓ Credit note {credit_note.name} posted, amount: {credit_note.amount_total}")
+    #                 # Post the credit note
+    #                 credit_note.action_post()
+    #                 _logger.info(f"✓ Credit note {credit_note.name} posted, amount: {credit_note.amount_total}")
 
-                    # ============================================================
-                    # STEP 3: Cancel the sale order
-                    # ============================================================
-                    sale_order.action_cancel()
-                    _logger.info(f"✓ Sale order {sale_order_name} cancelled")
+    #                 # ============================================================
+    #                 # STEP 3: Cancel the sale order
+    #                 # ============================================================
+    #                 sale_order.action_cancel()
+    #                 _logger.info(f"✓ Sale order {sale_order_name} cancelled")
 
-                    # ============================================================
-                    # STEP 4: Build response
-                    # ============================================================
-                    processed_returns.append({
-                        'sale_order_name': sale_order_name,
-                        'sale_order_id': sale_order.id,
-                        'sale_order_state': sale_order.state,
-                        'credit_note_id': credit_note.id,
-                        'credit_note_name': credit_note.name,
-                        'credit_note_state': credit_note.state,
-                        'credit_amount': credit_note.amount_total,
-                        'lines_returned': credit_lines_added,
-                    })
+    #                 # ============================================================
+    #                 # STEP 4: Build response
+    #                 # ============================================================
+    #                 processed_returns.append({
+    #                     'sale_order_name': sale_order_name,
+    #                     'sale_order_id': sale_order.id,
+    #                     'sale_order_state': sale_order.state,
+    #                     'credit_note_id': credit_note.id,
+    #                     'credit_note_name': credit_note.name,
+    #                     'credit_note_state': credit_note.state,
+    #                     'credit_amount': credit_note.amount_total,
+    #                     'lines_returned': credit_lines_added,
+    #                 })
                     
-                    _logger.info(f"✓✓✓ Return processed successfully for {sale_order_name}")
+    #                 _logger.info(f"✓✓✓ Return processed successfully for {sale_order_name}")
 
-                except Exception as e:
-                    _logger.exception(f"Failed to process return for {sale_order_name}")
-                    errors.append(f"Return {sale_order_name}: {str(e)}")
+    #             except Exception as e:
+    #                 _logger.exception(f"Failed to process return for {sale_order_name}")
+    #                 errors.append(f"Return {sale_order_name}: {str(e)}")
 
-            return {
-                'status': 'success' if not errors else 'partial_success',
-                'processed_returns': processed_returns,
-                'errors': errors if errors else None,
-                'summary': {
-                    'total_returns': len(returns),
-                    'successful_returns': len(processed_returns),
-                    'failed_returns': len(errors)
-                }
-            }
+    #         return {
+    #             'status': 'success' if not errors else 'partial_success',
+    #             'processed_returns': processed_returns,
+    #             'errors': errors if errors else None,
+    #             'summary': {
+    #                 'total_returns': len(returns),
+    #                 'successful_returns': len(processed_returns),
+    #                 'failed_returns': len(errors)
+    #             }
+    #         }
 
-        except Exception as e:
-            _logger.exception("Failed to process sale order returns")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
+    #     except Exception as e:
+    #         _logger.exception("Failed to process sale order returns")
+    #         return {
+    #             'status': 'error',
+    #             'message': str(e)
+    #         }
 
 
     
