@@ -3102,7 +3102,7 @@ class PosSyncController(http.Controller):
         
 
     @http.route('/api/products/all', type='http', auth='none', methods=['GET'], csrf=False)
-    def get_all_products(self, limit=1000, offset=0, **kwargs):
+    def get_all_products(self, **kwargs):
         """
         Get products with pagination
         
@@ -3110,7 +3110,6 @@ class PosSyncController(http.Controller):
         - limit: Number of products per page (default: 1000, max: 5000)
         - offset: Starting position (default: 0)
         """
-        # Verify token (your existing code)
         token = request.httprequest.headers.get('Authorization')
         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
@@ -3126,13 +3125,28 @@ class PosSyncController(http.Controller):
             limit = min(int(kwargs.get('limit', 1000)), 5000)  # Cap at 5000
             offset = int(kwargs.get('offset', 0))
             
-            # Add LIMIT and OFFSET to your query
+            # Query with pagination - REMOVED TRAILING COMMA
             query = """
                 SELECT 
                     pt.id,
                     pt.name,
                     pt.list_price,
-                    -- ... rest of your fields
+                    pt.volume,
+                    pt.weight,
+                    pt.active as template_active,
+                    pt.description_sale as description,
+                    pp.barcode,
+                    pp.id AS product_id,
+                    pp.default_code as sku,
+                    pp.active as product_active,
+                    uom.id AS uom_id,
+                    uom.name AS uom_name,
+                    uom.uom_type,
+                    uom.rounding AS uom_rounding,
+                    uom.factor AS uom_factor,
+                    pc.id AS category_id,
+                    pc.name AS category_name,
+                    pt.write_date as last_updated
                 FROM product_template pt
                 LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
                 LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
@@ -3160,11 +3174,51 @@ class PosSyncController(http.Controller):
             request.env.cr.execute(query, (limit, offset))
             raw_results = request.env.cr.dictfetchall()
             
-            # Your existing processing code...
+            # Format results (your existing code)
             products = []
             for row in raw_results:
-                # ... your existing product building logic
-                pass
+                # Build uom_id data
+                uom_data = None
+                if row.get('uom_id'):
+                    uom_data = {
+                        'id': row['uom_id'],
+                        'name': row['uom_name'],
+                        'uom_type': row['uom_type'],
+                        'rounding': float(row['uom_rounding']) if row['uom_rounding'] else None,
+                        'factor': float(row['uom_factor']) if row['uom_factor'] else None,
+                    }
+                
+                # Extract name from JSON if needed
+                name = row['name']
+                if isinstance(name, dict):
+                    name = name.get('ar_001') or name.get('en_US') or str(name)
+                
+                # Product is active only if both template and product variant are active
+                is_active = bool(row['template_active']) and bool(row['product_active'])
+                
+                # Build product data
+                product = {
+                    'template_id': row['id'],
+                    'id': row['product_id'],
+                    'name': name,
+                    'barcode': row['barcode'],
+                    'sku': row['sku'],
+                    'list_price': float(row['list_price']) if row['list_price'] else 0.0,
+                    'description': row['description'],
+                    'volume': float(row['volume']) if row['volume'] else 0.0,
+                    'weight': float(row['weight']) if row['weight'] else 0.0,
+                    'active': is_active,
+                    'template_active': bool(row['template_active']),
+                    'product_active': bool(row['product_active']),
+                    'uom_id': uom_data,
+                    'category': row['category_name'] if isinstance(row['category_name'], str) else 
+                            (row['category_name'].get('en_US') if isinstance(row['category_name'], dict) else None),
+                    'category_id': row['category_id'],
+                    'last_updated': row['last_updated'].isoformat() if row['last_updated'] else None,
+                    'tax_rate': 0.15  # Default VAT rate for Saudi Arabia
+                }
+                
+                products.append(product)
                 
             return request.make_json_response({
                 'status': 'success',
@@ -3177,7 +3231,7 @@ class PosSyncController(http.Controller):
             })
 
         except Exception as e:
-            _logger.exception("Failed to fetch products")
+            _logger.exception("Failed to fetch all products")
             return request.make_json_response({
                 'status': 'error',
                 'message': str(e)
