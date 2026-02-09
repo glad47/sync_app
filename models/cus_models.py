@@ -3212,12 +3212,11 @@ class PosSyncController(http.Controller):
                 }
                 
                 products.append(product)
-            
-            return {
+            return request.make_json_response({
                 'status': 'success',
                 'data': products,
                 'count': len(products)
-            }
+            })
 
         except Exception as e:
             _logger.exception("Failed to fetch all products")
