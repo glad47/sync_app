@@ -3102,25 +3102,15 @@ class PosSyncController(http.Controller):
         
 
     @http.route('/api/products/all', type='http', auth='none', methods=['GET'], csrf=False)
-    def get_all_products(self, **kwargs):
+    def get_all_products(self, limit=1000, offset=0, **kwargs):
         """
-        Get all products available for POS (both active and inactive)
+        Get products with pagination
         
-        Request:
-        POST/GET /api/products/all
-        Headers: Authorization: your-token
-        
-        Response:
-        {
-            "status": "success",
-            "data": [...],
-            "count": 100
-        }
+        Parameters:
+        - limit: Number of products per page (default: 1000, max: 5000)
+        - offset: Starting position (default: 0)
         """
-        print("i am inside my friend :) ")
-        print("*************************")
-        print("here")
-        # Verify token
+        # Verify token (your existing code)
         token = request.httprequest.headers.get('Authorization')
         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
@@ -3132,28 +3122,17 @@ class PosSyncController(http.Controller):
             )
 
         try:
-            # Query all POS products with barcodes (both active and inactive)
+            # Parse limit and offset from query params
+            limit = min(int(kwargs.get('limit', 1000)), 5000)  # Cap at 5000
+            offset = int(kwargs.get('offset', 0))
+            
+            # Add LIMIT and OFFSET to your query
             query = """
                 SELECT 
                     pt.id,
                     pt.name,
                     pt.list_price,
-                    pt.volume,
-                    pt.weight,
-                    pt.active as template_active,
-                    pt.description_sale as description,
-                    pp.barcode,
-                    pp.id AS product_id,
-                    pp.default_code as sku,
-                    pp.active as product_active,
-                    uom.id AS uom_id,
-                    uom.name AS uom_name,
-                    uom.uom_type,
-                    uom.rounding AS uom_rounding,
-                    uom.factor AS uom_factor,
-                    pc.id AS category_id,
-                    pc.name AS category_name,
-                    pt.write_date as last_updated
+                    -- ... rest of your fields
                 FROM product_template pt
                 LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
                 LEFT JOIN uom_uom uom ON uom.id = pt.uom_id
@@ -3162,68 +3141,47 @@ class PosSyncController(http.Controller):
                 AND pp.barcode IS NOT NULL
                 AND pp.barcode != ''
                 ORDER BY pt.name
+                LIMIT %s OFFSET %s
             """
             
-            request.env.cr.execute(query)
+            # Get total count
+            count_query = """
+                SELECT COUNT(DISTINCT pt.id)
+                FROM product_template pt
+                LEFT JOIN product_product pp ON pp.product_tmpl_id = pt.id
+                WHERE pt.available_in_pos = TRUE 
+                AND pp.barcode IS NOT NULL
+                AND pp.barcode != ''
+            """
+            
+            request.env.cr.execute(count_query)
+            total_count = request.env.cr.fetchone()[0]
+            
+            request.env.cr.execute(query, (limit, offset))
             raw_results = request.env.cr.dictfetchall()
             
-            # Format results
+            # Your existing processing code...
             products = []
             for row in raw_results:
-                # Build uom_id data
-                uom_data = None
-                if row.get('uom_id'):
-                    uom_data = {
-                        'id': row['uom_id'],
-                        'name': row['uom_name'],
-                        'uom_type': row['uom_type'],
-                        'rounding': float(row['uom_rounding']) if row['uom_rounding'] else None,
-                        'factor': float(row['uom_factor']) if row['uom_factor'] else None,
-                    }
+                # ... your existing product building logic
+                pass
                 
-                # Extract name from JSON if needed
-                name = row['name']
-                if isinstance(name, dict):
-                    name = name.get('ar_001') or name.get('en_US') or str(name)
-                
-                # Product is active only if both template and product variant are active
-                is_active = bool(row['template_active']) and bool(row['product_active'])
-                
-                # Build product data
-                product = {
-                    'template_id': row['id'],
-                    'id': row['product_id'],
-                    'name': name,
-                    'barcode': row['barcode'],
-                    'sku': row['sku'],
-                    'list_price': float(row['list_price']) if row['list_price'] else 0.0,
-                    'description': row['description'],
-                    'volume': float(row['volume']) if row['volume'] else 0.0,
-                    'weight': float(row['weight']) if row['weight'] else 0.0,
-                    'active': is_active,
-                    'template_active': bool(row['template_active']),
-                    'product_active': bool(row['product_active']),
-                    'uom_id': uom_data,
-                    'category': row['category_name'] if isinstance(row['category_name'], str) else 
-                               (row['category_name'].get('en_US') if isinstance(row['category_name'], dict) else None),
-                    'category_id': row['category_id'],
-                    'last_updated': row['last_updated'].isoformat() if row['last_updated'] else None,
-                    'tax_rate': 0.15  # Default VAT rate for Saudi Arabia
-                }
-                
-                products.append(product)
             return request.make_json_response({
                 'status': 'success',
                 'data': products,
-                'count': len(products)
+                'count': len(products),
+                'total': total_count,
+                'limit': limit,
+                'offset': offset,
+                'has_more': (offset + limit) < total_count
             })
 
         except Exception as e:
-            _logger.exception("Failed to fetch all products")
-            return {
+            _logger.exception("Failed to fetch products")
+            return request.make_json_response({
                 'status': 'error',
                 'message': str(e)
-            }
+            }, status=500)
 
 
     @http.route('/api/loyalty/programs/<int:program_id>', type='json', auth='public', methods=['GET'])
