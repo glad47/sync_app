@@ -3101,7 +3101,7 @@ class PosSyncController(http.Controller):
             }   
         
 
-    @http.route('/api/products/all', type='json', auth='public', methods=['POST'])
+    @http.route('/api/products/all', type='http', auth='none', methods=['GET'], csrf=False)
     def get_all_products(self, **kwargs):
         """
         Get all products available for POS (both active and inactive)
