@@ -3801,7 +3801,7 @@ class PosSyncController(http.Controller):
 #         send_webhook(payload)
 
 
-# class PurchaseOrderReceivingController(http.Controller):
+class PurchaseOrderReceivingController(http.Controller):
 #     """Controller for receiving purchase order items via API"""
 
 
@@ -4376,61 +4376,61 @@ class PosSyncController(http.Controller):
 #             })
 
 
-#     @http.route('/api/purchase/order/<string:po_name>', type='json', auth='public', methods=['GET'])
-#     def get_purchase_order_details(self, po_name):
-#         """Get purchase order details for receiving"""
-#         # Verify token
-#         token = request.httprequest.headers.get('Authorization')
-#         user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+    @http.route('/api/purchase/order/<string:po_name>', type='json', auth='public', methods=['GET'])
+    def get_purchase_order_details(self, po_name):
+        """Get purchase order details for receiving"""
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
 
-#         if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-#             return {'error': 'Unauthorized or token expired'}, 401
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return {'error': 'Unauthorized or token expired'}, 401
 
-#         try:
-#             purchase_order = request.env['purchase.order'].sudo().search([
-#                 ('name', '=', po_name)
-#             ], limit=1)
+        try:
+            purchase_order = request.env['purchase.order'].sudo().search([
+                ('name', '=', po_name)
+            ], limit=1)
 
-#             if not purchase_order:
-#                 return {
-#                     'status': 'error',
-#                     'message': f'Purchase order {po_name} not found'
-#                 }
+            if not purchase_order:
+                return {
+                    'status': 'error',
+                    'message': f'Purchase order {po_name} not found'
+                }
 
-#             lines_data = []
-#             for line in purchase_order.order_line:
-#                 lines_data.append({
-#                     'line_id': line.id,
-#                     'product_id': line.product_id.id,
-#                     'product_name': line.product_id.name,
-#                     'product_barcode': line.product_id.barcode,
-#                     'product_code': line.product_id.default_code,
-#                     'qty_ordered': line.product_qty,
-#                     'qty_received': line.qty_received,
-#                     'qty_remaining': line.product_qty - line.qty_received,
-#                     'price_unit': line.price_unit,
-#                     'uom_name': line.product_uom.name
-#                 })
+            lines_data = []
+            for line in purchase_order.order_line:
+                lines_data.append({
+                    'line_id': line.id,
+                    'product_id': line.product_id.id,
+                    'product_name': line.product_id.name,
+                    'product_barcode': line.product_id.barcode,
+                    'product_code': line.product_id.default_code,
+                    'qty_ordered': line.product_qty,
+                    'qty_received': line.qty_received,
+                    'qty_remaining': line.product_qty - line.qty_received,
+                    'price_unit': line.price_unit,
+                    'uom_name': line.product_uom.name
+                })
 
-#             return {
-#                 'status': 'success',
-#                 'purchase_order': {
-#                     'id': purchase_order.id,
-#                     'name': purchase_order.name,
-#                     'state': purchase_order.state,
-#                     'partner_name': purchase_order.partner_id.name,
-#                     'date_order': purchase_order.date_order.isoformat() if purchase_order.date_order else None,
-#                     'amount_total': purchase_order.amount_total,
-#                     'lines': lines_data
-#                 }
-#             }
+            return {
+                'status': 'success',
+                'purchase_order': {
+                    'id': purchase_order.id,
+                    'name': purchase_order.name,
+                    'state': purchase_order.state,
+                    'partner_name': purchase_order.partner_id.name,
+                    'date_order': purchase_order.date_order.isoformat() if purchase_order.date_order else None,
+                    'amount_total': purchase_order.amount_total,
+                    'lines': lines_data
+                }
+            }
 
-#         except Exception as e:
-#             _logger.exception("Failed to get purchase order details")
-#             return {
-#                 'status': 'error',
-#                 'message': str(e)
-#             }
+        except Exception as e:
+            _logger.exception("Failed to get purchase order details")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
 
 
 
