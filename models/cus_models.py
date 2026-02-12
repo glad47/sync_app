@@ -4532,7 +4532,95 @@ class PurchaseOrderReceivingController(http.Controller):
 
 
 
-# class StockReceivingController(http.Controller):
+class StockReceivingController(http.Controller):
+    
+    
+    @http.route('/api/sync/transfer', type='http', auth='public', methods=['GET'], csrf=False)
+    def get_transfer_details(self, **kwargs):
+        """Get stock transfer/picking details for processing"""
+        import json
+        
+        # Verify token
+        token = request.httprequest.headers.get('Authorization')
+        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+
+        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+            return request.make_response(
+                json.dumps({'error': 'Unauthorized or token expired'}),
+                status=401,
+                headers={'Content-Type': 'application/json'}
+            )
+
+        # Get transfer name from query parameter
+        transfer_name = kwargs.get('name')
+        
+        if not transfer_name:
+            return request.make_response(
+                json.dumps({'status': 'error', 'message': 'Missing required parameter: name'}),
+                headers={'Content-Type': 'application/json'}
+            )
+
+        try:
+            transfer = request.env['stock.picking'].sudo().search([
+                ('name', '=', transfer_name)
+            ], limit=1)
+
+            if not transfer:
+                return request.make_response(
+                    json.dumps({'status': 'error', 'message': f'Transfer {transfer_name} not found'}),
+                    headers={'Content-Type': 'application/json'}
+                )
+
+            lines_data = []
+            for line in transfer.move_ids_without_package:
+                lines_data.append({
+                    'move_id': line.id,
+                    'product_id': line.product_id.id,
+                    'product_name': line.product_id.name,
+                    'product_barcode': line.product_id.barcode,
+                    'product_code': line.product_id.default_code,
+                    'qty_demand': line.product_uom_qty,
+                    'qty_done': line.quantity_done,
+                    'qty_remaining': line.product_uom_qty - line.quantity_done,
+                    'uom_name': line.product_uom.name,
+                    'location_id': line.location_id.id,
+                    'location_name': line.location_id.display_name,
+                    'location_dest_id': line.location_dest_id.id,
+                    'location_dest_name': line.location_dest_id.display_name,
+                })
+
+            response_data = {
+                'status': 'success',
+                'transfer': {
+                    'id': transfer.id,
+                    'name': transfer.name,
+                    'state': transfer.state,
+                    'origin': transfer.origin,
+                    'partner_name': transfer.partner_id.name if transfer.partner_id else None,
+                    'scheduled_date': transfer.scheduled_date.isoformat() if transfer.scheduled_date else None,
+                    'date_done': transfer.date_done.isoformat() if transfer.date_done else None,
+                    'picking_type': transfer.picking_type_id.name,
+                    'picking_type_code': transfer.picking_type_id.code,
+                    'location_id': transfer.location_id.id,
+                    'location_name': transfer.location_id.display_name,
+                    'location_dest_id': transfer.location_dest_id.id,
+                    'location_dest_name': transfer.location_dest_id.display_name,
+                    'lines': lines_data
+                }
+            }
+
+            return request.make_response(
+                json.dumps(response_data),
+                headers={'Content-Type': 'application/json'}
+            )
+
+        except Exception as e:
+            _logger.exception("Failed to get transfer details")
+            return request.make_response(
+                json.dumps({'status': 'error', 'message': str(e)}),
+                headers={'Content-Type': 'application/json'}
+            )
+
 
 #     @http.route('/api/sync/receipt', type='http', auth='none', methods=['GET'], csrf=False)
 #     def get_receipt_sync(self, **kwargs):
