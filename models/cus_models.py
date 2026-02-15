@@ -2789,10 +2789,10 @@ class PosSyncController(http.Controller):
     def get_product_price(self, barcode):
         """Get product price by barcode for price checker"""
         # Verify token
-        token = request.httprequest.headers.get('Authorization')
-        user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
-        if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-            return {'error': 'Unauthorized or token expired'}, 401
+        # token = request.httprequest.headers.get('Authorization')
+        # user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
+        # if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
+        #     return {'error': 'Unauthorized or token expired'}, 401
 
         try:
             product = request.env['product.product'].sudo().search([
