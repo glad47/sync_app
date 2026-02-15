@@ -2785,27 +2785,21 @@ class PosSyncController(http.Controller):
     # Add these at the end of PosSyncController class
     # ============================================
     
-    @http.route('/api/pricechecker/product/<string:barcode>', type='json', auth='public', methods=['GET'])
-    def get_product_price(self, barcode):
+    @http.route('/api/pricechecker/product/<string:barcode>', type='http', auth='none', methods=['GET'], csrf=False)
+    def get_product_price(self, barcode, **kwargs):
         """Get product price by barcode for price checker"""
-        # Verify token
-        # token = request.httprequest.headers.get('Authorization')
-        # user = request.env['auth.user.token'].sudo().search([('token', '=', token)], limit=1)
-        # if not user or not user.token_expiration or user.token_expiration < datetime.utcnow():
-        #     return {'error': 'Unauthorized or token expired'}, 401
-
         try:
             product = request.env['product.product'].sudo().search([
                 ('barcode', '=', barcode)
             ], limit=1)
 
             if not product:
-                return {
+                return request.make_json_response({
                     'status': 'error',
                     'message': f'Product with barcode {barcode} not found'
-                }
+                })
 
-            return {
+            return request.make_json_response({
                 'status': 'success',
                 'product': {
                     'id': product.id,
@@ -2815,14 +2809,14 @@ class PosSyncController(http.Controller):
                     'currency': product.currency_id.name,
                     'uom_name': product.uom_id.name
                 }
-            }
+            })
 
         except Exception as e:
             _logger.exception("Failed to get product price")
-            return {
+            return request.make_json_response({
                 'status': 'error',
                 'message': str(e)
-            }
+            })
 
     @http.route('/api/loyalty/all', type='http', auth='none', methods=['GET'], csrf=False)
     def get_all_loyalty_programs(self, **kwargs):
