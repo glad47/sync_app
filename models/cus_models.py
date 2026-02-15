@@ -2785,7 +2785,7 @@ class PosSyncController(http.Controller):
     # Add these at the end of PosSyncController class
     # ============================================
     
-    @http.route('/api/pricechecker/product/', type='json', auth='public', methods=['GET'])
+    @http.route('/api/pricechecker/product/<string:barcode>', type='json', auth='public', methods=['GET'])
     def get_product_price(self, barcode):
         """Get product price by barcode for price checker"""
         # Verify token
@@ -2811,7 +2811,6 @@ class PosSyncController(http.Controller):
                     'id': product.id,
                     'name': product.name,
                     'barcode': product.barcode,
-                    'default_code': product.default_code,
                     'lst_price': product.lst_price,
                     'currency': product.currency_id.name,
                     'uom_name': product.uom_id.name
